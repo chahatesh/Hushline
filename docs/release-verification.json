@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "tester": "Local automated validation in the implementation workspace",
+  "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
+  "testedAt": "2026-10-18T17:04:33.8343133Z",
+  "evidence": "docs/QA.md and docs/verification/*.json. Silent per-user install/background launch/uninstall and real native dashboard checks passed. A valid Groq key and spoken interactive Notepad acceptance are still required; other checks remain false.",
+  "checks": {
+    "installLaunch": true,
+    "saveKey": false,
+    "selectMicrophone": false,
+    "pushToTalkNotepad": false,
+    "handsFree": false,
+    "cancel": false,
+    "focusChange": false,
+    "clipboardRestore": false,
+    "commandPreview": false,
+    "independentBuild": false
+  }
+}
