@@ -1,0 +1,36 @@
+{
+  "name": "hushline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Chahatesh",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "test": "vitest run",
+    "test:ui": "playwright test",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "package": "tauri build",
+    "portable": "powershell -NoProfile -File scripts/portable.ps1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "solid-js": "^1.9.9",
+    "lucide-solid": "^0.468.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@playwright/test": "^1.56.0",
+    "@tauri-apps/cli": "^2.12.3",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vite": "^6.4.1",
+    "vite-plugin-solid": "^2.11.10",
+    "vitest": "^3.2.4"
+  }
+}
