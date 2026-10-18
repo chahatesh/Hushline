@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
 import { render } from 'solid-js/web';
-import { App, Overlay } from './ui';
+import { App } from './ui';
 import './styles.css';
-render(() => new URLSearchParams(location.search).has('overlay') ? <Overlay /> : <App />, document.getElementById('root')!);
+render(() => <App />, document.getElementById('root')!);

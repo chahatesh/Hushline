@@ -33,6 +33,8 @@ enum Message {
     Audio(u64, audio::Event),
     Target(u64, bool, Result<Target, String>),
     Done(u64, Box<Result<Completed, String>>),
+    Delivered(u64, Box<Completed>, bool, String),
+    Applied(u64, Result<String, String>),
     Apply,
     Hide(u64),
 }
@@ -63,17 +65,12 @@ struct Pending {
 
 fn publish(app: &tauri::AppHandle, state: &AppState, change: impl FnOnce(&mut View)) {
     if let Ok(mut view) = state.view.lock() {
-        let was_idle = view.phase == "idle";
         change(&mut view);
         native::set_active(view.phase != "idle");
-        let _ = app.emit("dictation", view.clone());
-        if let Some(overlay) = app.get_webview_window("overlay") {
-            if view.phase == "idle" && !was_idle {
-                let _ = overlay.hide();
-            } else if view.phase != "idle" && was_idle {
-                let _ = overlay.show();
-            }
+        if app.get_webview_window("main").is_some() {
+            let _ = app.emit_to("main", "dictation", view.clone());
         }
+        native::update_overlay(&view);
     }
 }
 fn show(app: &tauri::AppHandle, page: Option<&str>) {
@@ -94,27 +91,6 @@ fn show(app: &tauri::AppHandle, page: Option<&str>) {
         let _ = main.set_focus();
         if let Some(page) = page {
             let _ = app.emit_to("main", "navigate", page);
-        }
-    }
-}
-fn place_overlay(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("overlay") {
-        if let (Ok(cursor), Ok(monitors)) = (w.cursor_position(), w.available_monitors()) {
-            if let Some(m) = monitors.into_iter().find(|m| {
-                let p = m.position();
-                let s = m.size();
-                cursor.x >= p.x as f64
-                    && cursor.y >= p.y as f64
-                    && cursor.x < (p.x as f64 + s.width as f64)
-                    && cursor.y < (p.y as f64 + s.height as f64)
-            }) {
-                let scale = m.scale_factor();
-                let size = m.size();
-                let pos = m.position();
-                let x = pos.x + (size.width as f64 / 2.0 - 180.0 * scale) as i32;
-                let y = pos.y + size.height as i32 - (140.0 * scale) as i32;
-                let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-            }
         }
     }
 }
@@ -158,7 +134,6 @@ fn begin(
         v.original = None;
         v.warning.clear();
     });
-    place_overlay(app);
     let (events, rx) = mpsc::channel();
     let capture = audio::start(settings.clone(), events);
     let tx = state.tx.clone();
@@ -212,17 +187,23 @@ async fn process(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let spoken = state
+    let speech = state
         .groq
         .transcribe(&key, recording.wav, &session.settings, &hints, &cancel)
         .await?;
+    let local_mode = text::local_mode(
+        &session.settings.mode,
+        &session.settings.language,
+        speech.language.as_deref(),
+    );
+    let spoken = speech.text;
     if spoken.trim().is_empty() {
         return Err("Groq returned no speech. Nothing was inserted.".into());
     }
     let target = session.target.unwrap_or_else(|| {
         Err("The original field could not be inspected in time. Transcript preserved.".into())
     });
-    let mut output = text::normalize(&spoken, &session.settings.mode, &dictionary);
+    let mut output = text::normalize(&spoken, &local_mode, &dictionary);
     let mut preview = false;
     let mut original = None;
     let mut warning = String::new();
@@ -304,6 +285,71 @@ async fn process(
         settings: session.settings,
         warning,
     })
+}
+
+fn finish_completed(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    id: u64,
+    done: Completed,
+    inserted: bool,
+    mut warning: String,
+) -> Option<Pending> {
+    let pending = if done.preview {
+        done.target.as_ref().ok().map(|target| Pending {
+            text: done.text.clone(),
+            target: target.clone(),
+        })
+    } else {
+        None
+    };
+    if done.settings.history_enabled && state.settings.read().unwrap().history_enabled {
+        let record = Transcript {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: done.text.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            app: done
+                .target
+                .as_ref()
+                .map(|t| t.app.clone())
+                .unwrap_or_default(),
+            words: done.text.split_whitespace().count() as u32,
+            duration_ms: done.duration,
+            latency_ms: done.latency,
+            inserted,
+        };
+        if let Err(e) = state.store.insert(&record) {
+            warning = format!("Transcript ready; history could not be saved: {e}");
+        }
+    }
+    publish(app, state, |v| {
+        v.last_text = done.text.clone();
+        v.phase = if done.preview {
+            "preview"
+        } else if inserted {
+            "success"
+        } else {
+            "error"
+        }
+        .into();
+        v.message = if done.preview {
+            "Review your edit"
+        } else if inserted {
+            "Done"
+        } else {
+            "Transcript ready to copy"
+        }
+        .into();
+        v.preview = if done.preview { Some(done.text) } else { None };
+        v.original = done.original;
+        v.warning = warning;
+    });
+    if done.preview {
+        show(app, Some("Home"));
+    } else {
+        schedule_hide(state.tx.clone(), id, if inserted { 1300 } else { 8000 });
+    }
+    pending
 }
 
 async fn actor(
@@ -573,126 +619,96 @@ async fn actor(
                         schedule_hide(state.tx.clone(), id, 8000);
                     }
                     Ok(done) => {
-                        let app_name = done
-                            .target
-                            .as_ref()
-                            .map(|t| t.app.clone())
-                            .unwrap_or_default();
-                        let mut inserted = false;
-                        let mut warning = done.warning.clone();
                         if done.preview {
-                            if let Ok(target) = done.target.clone() {
-                                pending = Some(Pending {
-                                    text: done.text.clone(),
-                                    target,
-                                });
-                            }
+                            let warning = done.warning.clone();
+                            pending = finish_completed(&app, &state, id, done, false, warning);
                         } else {
+                            publish(&app, &state, |v| {
+                                v.last_text = done.text.clone();
+                                v.message = "Inserting text".into();
+                            });
                             let target = done.target.clone();
                             let text = done.text.clone();
                             let method = done.settings.insertion.clone();
-                            // Insertion must also observe cancellation after entering the blocking worker.
                             let token = cancellation.clone();
-                            let result = tauri::async_runtime::spawn_blocking(move || {
-                                if token.is_cancelled() {
-                                    return Err("Cancelled".into());
-                                }
-                                native::insert(&target?, &text, &method, false, &token)
-                            })
-                            .await;
-                            match result {
-                                Ok(Ok(message)) => {
-                                    inserted = true;
-                                    if done.settings.insertion == "clipboard" {
-                                        warning = message;
-                                    }
-                                }
-                                Ok(Err(e)) => warning = e,
-                                _ => {
-                                    warning =
-                                        "Insertion worker failed. Transcript preserved.".into()
-                                }
-                            }
-                        }
-                        if done.settings.history_enabled
-                            && state.settings.read().unwrap().history_enabled
-                        {
-                            let record = Transcript {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                text: done.text.clone(),
-                                created_at: chrono::Utc::now().to_rfc3339(),
-                                app: app_name,
-                                words: done.text.split_whitespace().count() as u32,
-                                duration_ms: done.duration,
-                                latency_ms: done.latency,
-                                inserted,
-                            };
-                            if let Err(e) = state.store.insert(&record) {
-                                warning =
-                                    format!("Transcript ready; history could not be saved: {e}");
-                            }
-                        }
-                        publish(&app, &state, |v| {
-                            v.last_text = done.text.clone();
-                            v.phase = if done.preview {
-                                "preview"
-                            } else if inserted {
-                                "success"
-                            } else {
-                                "error"
-                            }
-                            .into();
-                            v.message = if done.preview {
-                                "Review your edit"
-                            } else if inserted {
-                                "Done"
-                            } else {
-                                "Transcript ready to copy"
-                            }
-                            .into();
-                            v.preview = if done.preview { Some(done.text) } else { None };
-                            v.original = done.original;
-                            v.warning = warning;
-                        });
-                        if done.preview {
-                            show(&app, Some("Home"));
-                        } else {
-                            schedule_hide(state.tx.clone(), id, if inserted { 1300 } else { 8000 });
+                            let tx = state.tx.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let result = tauri::async_runtime::spawn_blocking(move || {
+                                    native::insert(&target?, &text, &method, false, &token)
+                                })
+                                .await;
+                                let (inserted, warning) = match result {
+                                    Ok(Ok(message)) => (
+                                        true,
+                                        if done.settings.insertion == "clipboard" {
+                                            message
+                                        } else {
+                                            done.warning.clone()
+                                        },
+                                    ),
+                                    Ok(Err(e)) => (false, e),
+                                    _ => (
+                                        false,
+                                        "Insertion worker failed. Transcript preserved.".into(),
+                                    ),
+                                };
+                                let _ = tx.send(Message::Delivered(
+                                    id,
+                                    Box::new(done),
+                                    inserted,
+                                    warning,
+                                ));
+                            });
                         }
                     }
+                }
+            }
+            Message::Delivered(id, done, inserted, warning) => {
+                if id == generation && !cancellation.is_cancelled() {
+                    pending = finish_completed(&app, &state, id, *done, inserted, warning);
                 }
             }
             Message::Apply => {
                 if let Some(p) = pending.take() {
                     let method = state.settings.read().unwrap().insertion.clone();
                     let token = cancellation.clone();
-                    let result = tauri::async_runtime::spawn_blocking(move || {
-                        native::insert(&p.target, &p.text, &method, true, &token)
-                    })
-                    .await;
+                    let tx = state.tx.clone();
+                    let id = generation;
                     publish(&app, &state, |v| {
+                        v.phase = "processing".into();
+                        v.message = "Applying your edit".into();
                         v.preview = None;
                         v.original = None;
-                        match result {
-                            Ok(Ok(message)) => {
-                                v.phase = "success".into();
-                                v.message = "Edit applied".into();
-                                v.warning = message;
-                            }
-                            Ok(Err(e)) => {
-                                v.phase = "error".into();
-                                v.message = "Edit ready to copy".into();
-                                v.warning = e;
-                            }
-                            _ => {
-                                v.phase = "error".into();
-                                v.warning =
-                                    "Edit could not be applied. Transcript preserved.".into();
-                            }
-                        }
                     });
-                    schedule_hide(state.tx.clone(), generation, 5000);
+                    tauri::async_runtime::spawn(async move {
+                        let result = tauri::async_runtime::spawn_blocking(move || {
+                            native::insert(&p.target, &p.text, &method, true, &token)
+                        })
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err("Edit worker failed. Transcript preserved.".into())
+                        });
+                        let _ = tx.send(Message::Applied(id, result));
+                    });
                 }
+            }
+            Message::Applied(id, result) => {
+                if id != generation || cancellation.is_cancelled() {
+                    continue;
+                }
+                publish(&app, &state, |v| match result {
+                    Ok(message) => {
+                        v.phase = "success".into();
+                        v.message = "Edit applied".into();
+                        v.warning = message;
+                    }
+                    Err(e) => {
+                        v.phase = "error".into();
+                        v.message = "Edit ready to copy".into();
+                        v.warning = e;
+                    }
+                });
+                schedule_hide(state.tx.clone(), id, 5000);
             }
             Message::Hide(id) => {
                 if id == generation && session.is_none() && pending.is_none() {
@@ -753,12 +769,20 @@ fn save_scratchpad(state: State<Arc<AppState>>, content: String) -> Result<(), S
     state.store.set("scratchpad", &content)
 }
 #[tauri::command]
-fn save_api_key(key: String) -> Result<(), String> {
-    native::save_key(key)
+fn save_api_key(
+    state: State<Arc<AppState>>,
+    app: tauri::AppHandle,
+    key: String,
+) -> Result<(), String> {
+    native::save_key(key)?;
+    publish(&app, &state, |v| v.has_key = true);
+    Ok(())
 }
 #[tauri::command]
-fn delete_api_key() -> Result<(), String> {
-    native::delete_key()
+fn delete_api_key(state: State<Arc<AppState>>, app: tauri::AppHandle) -> Result<(), String> {
+    native::delete_key()?;
+    publish(&app, &state, |v| v.has_key = false);
+    Ok(())
 }
 #[tauri::command]
 fn microphones() -> Result<Vec<String>, String> {
@@ -794,7 +818,9 @@ fn recover_text(state: State<Arc<AppState>>, text: String) -> Result<(), String>
 }
 #[tauri::command]
 fn action(state: State<Arc<AppState>>, name: String) -> Result<(), String> {
-    if name == "cancel" {
+    let restart = matches!(name.as_str(), "toggle" | "test")
+        && state.view.lock().map_err(|_| "State unavailable")?.phase == "processing";
+    if name == "cancel" || restart {
         state
             .cancel
             .lock()
@@ -858,7 +884,7 @@ pub fn run() {
                 .args(["--background"])
                 .build(),
         );
-    builder
+    let application = builder
         .invoke_handler(tauri::generate_handler![
             snapshot,
             save_settings,
@@ -899,20 +925,28 @@ pub fn run() {
                 cancel: Mutex::new(CancellationToken::new()),
             });
             let (hook_tx, hook_rx) = mpsc::channel();
-            if let Err(e) = native::start_hooks(&settings.shortcuts, hook_tx) {
+            if let Err(e) = native::start_hooks(&settings.shortcuts, hook_tx.clone()) {
                 state.view.lock().unwrap().warning = e;
             }
             let cancel_state = state.clone();
             std::thread::spawn(move || {
                 while let Ok(action) = hook_rx.recv() {
-                    if matches!(
-                        action,
-                        Action::Cancel
-                            | Action::Copy
-                            | Action::Paste
-                            | Action::Open
-                            | Action::Scratchpad
-                    ) {
+                    let restart =
+                        matches!(action, Action::Push | Action::HandsFree | Action::Command)
+                            && cancel_state
+                                .view
+                                .lock()
+                                .is_ok_and(|v| v.phase == "processing");
+                    if restart
+                        || matches!(
+                            action,
+                            Action::Cancel
+                                | Action::Copy
+                                | Action::Paste
+                                | Action::Open
+                                | Action::Scratchpad
+                        )
+                    {
                         if let Ok(token) = cancel_state.cancel.lock() {
                             token.cancel();
                         }
@@ -922,9 +956,8 @@ pub fn run() {
                     }
                 }
             });
-            if let Some(w) = app.get_webview_window("overlay") {
-                let _ = w.set_ignore_cursor_events(false);
-                let _ = w.set_focusable(false);
+            if let Err(e) = native::start_overlay(hook_tx) {
+                state.view.lock().unwrap().warning = e;
             }
             let open =
                 tauri::menu::MenuItem::with_id(app, "open", "Open Hushline", true, None::<&str>)?;
@@ -946,19 +979,20 @@ pub fn run() {
                     "open" => show(app, None),
                     "cancel" => {
                         let s = app.state::<Arc<AppState>>();
+                        if let Ok(token) = s.cancel.lock() {
+                            token.cancel();
+                        }
                         let _ = s.tx.send(Message::Action(Action::Cancel));
                     }
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
-            if std::env::args().any(|s| s == "--background") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.destroy();
-                }
-            }
             app.manage(state.clone());
             tauri::async_runtime::spawn(actor(app.handle().clone(), state, rx));
+            if !std::env::args().any(|s| s == "--background") {
+                show(app.handle(), None);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -969,6 +1003,14 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("Hushline could not start");
+    application.run(|_, event| {
+        if let tauri::RunEvent::ExitRequested {
+            code: None, api, ..
+        } = event
+        {
+            api.prevent_exit();
+        }
+    });
 }

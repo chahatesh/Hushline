@@ -318,9 +318,12 @@ fn target_matches(a: &Target, b: &Target, explicit: bool) -> bool {
         && (explicit || a.epoch == b.epoch)
 }
 fn unicode_text(text: &str) -> Result<()> {
+    if text.contains(['\r', '\n']) {
+        return Err("Multiline text is ready to copy. Choose clipboard insertion in Settings for multiline paste; Unicode typing never sends Enter.".into());
+    }
     // One batch minimizes the gap between validation and delivery. No Enter key or submit command.
     let mut inputs = Vec::with_capacity(text.len() * 2);
-    for code in text.replace('\n', "\r").encode_utf16() {
+    for code in text.encode_utf16() {
         for up in [false, true] {
             inputs.push(INPUT {
                 r#type: INPUT_KEYBOARD,
@@ -406,6 +409,31 @@ pub fn delete_key() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unicode_multiline_cannot_submit_a_message() {
+        assert!(unicode_text("first line\nsecond line").is_err());
+        assert!(unicode_text("first line\rsecond line").is_err());
+    }
+    #[test]
+    #[ignore = "Temporarily stores a dummy credential in Hushline's Windows credential slot; refuses to replace an existing key."]
+    fn credential_manager_roundtrip() {
+        assert!(
+            read_key().is_err(),
+            "An existing Hushline key is present; refusing to overwrite it"
+        );
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = delete_key();
+            }
+        }
+        let dummy = "hushline-test-only-not-a-real-groq-key";
+        save_key(dummy.into()).unwrap();
+        let _cleanup = Cleanup;
+        assert_eq!(read_key().unwrap().as_str(), dummy);
+        delete_key().unwrap();
+        assert!(read_key().is_err());
+    }
     #[test]
     fn changed_focus_is_rejected() {
         let t = Target {

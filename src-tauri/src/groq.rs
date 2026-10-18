@@ -9,6 +9,11 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 const BASE: &str = "https://api.groq.com/openai/v1";
+#[derive(Debug)]
+pub struct Speech {
+    pub text: String,
+    pub language: Option<String>,
+}
 pub struct Groq {
     client: Client,
     base: String,
@@ -99,7 +104,7 @@ impl Groq {
         s: &Settings,
         hints: &str,
         cancel: &CancellationToken,
-    ) -> Result<String, String> {
+    ) -> Result<Speech, String> {
         if wav.len() > 24_000_000 {
             return Err("Recording exceeds the safe upload size. Use shorter recordings.".into());
         }
@@ -112,7 +117,7 @@ impl Groq {
                 let mut form = reqwest::multipart::Form::new()
                     .part("file", part)
                     .text("model", s.speech_model.clone())
-                    .text("response_format", "json")
+                    .text("response_format", "verbose_json")
                     .text("temperature", "0");
                 if !s.language.is_empty() {
                     form = form.text("language", s.language.clone());
@@ -127,11 +132,15 @@ impl Groq {
             })
             .await?;
         let json: serde_json::Value = tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), r=r.json()=>r.map_err(|_|"Groq returned an invalid transcript.")? };
-        json["text"]
+        let text = json["text"]
             .as_str()
             .filter(|v| v.len() <= 100_000)
             .map(str::to_owned)
-            .ok_or("Groq returned no usable transcript.".into())
+            .ok_or_else(|| "Groq returned no usable transcript.".to_string())?;
+        Ok(Speech {
+            text,
+            language: json["language"].as_str().map(str::to_owned),
+        })
     }
     pub async fn rewrite(
         &self,
@@ -251,23 +260,27 @@ mod tests {
     }
     #[tokio::test]
     async fn sends_documented_multipart_fields() {
-        let (g, rx) = server(vec![(200, "", r#"{"text":"Hello from Groq."}"#)]);
+        let (g, rx) = server(vec![(
+            200,
+            "",
+            r#"{"text":"Hello from Groq.","language":"english"}"#,
+        )]);
         let s = Settings {
             language: "en".into(),
             ..Settings::default()
         };
-        assert_eq!(
-            g.transcribe(
+        let speech = g
+            .transcribe(
                 "test-only-key",
                 b"RIFF test WAV".to_vec(),
                 &s,
                 "Hushline, Groq",
-                &CancellationToken::new()
+                &CancellationToken::new(),
             )
             .await
-            .unwrap(),
-            "Hello from Groq."
-        );
+            .unwrap();
+        assert_eq!(speech.text, "Hello from Groq.");
+        assert_eq!(speech.language.as_deref(), Some("english"));
         let request = rx.recv().unwrap();
         for expected in [
             "POST /audio/transcriptions",
@@ -278,6 +291,7 @@ mod tests {
             "name=\"prompt\"",
             "Hushline, Groq",
             "dictation.wav",
+            "verbose_json",
         ] {
             assert!(request.contains(expected), "{expected}");
         }

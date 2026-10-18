@@ -3,6 +3,9 @@
 use crate::model::*;
 use regex::{Captures, Regex};
 use std::sync::LazyLock;
+static PROTECTED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://\S+|www\.\S+|[\p{L}\p{N}._%+\-]+@[\p{L}\p{N}.\-]+\.[\p{L}]{2,}|`[^`\n]*`|(?:[A-Za-z]:\\|/)[^\s]+|\b[A-Za-z_][A-Za-z0-9]*_[A-Za-z0-9_]*\b|\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b|\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+\b|\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*\b").unwrap()
+});
 static FILLER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(?:um+|uh+|erm)\b[, ]*").unwrap());
 static SPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\S\r\n]{2,}").unwrap());
@@ -27,10 +30,34 @@ static COMMANDS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     .collect()
 });
 
+pub fn local_mode(mode: &Mode, explicit: &str, detected: Option<&str>) -> Mode {
+    let english = if explicit.is_empty() {
+        detected.is_some_and(|v| v.eq_ignore_ascii_case("en") || v.eq_ignore_ascii_case("english"))
+    } else {
+        explicit == "en"
+    };
+    if english {
+        mode.clone()
+    } else {
+        Mode::Literal
+    }
+}
 pub fn normalize(input: &str, mode: &Mode, entries: &[Entry]) -> String {
     let mut out = input.trim().to_owned();
     // Commands are opt-in by explicit phrases; ordinary words like "period" remain literal.
     if *mode != Mode::Literal {
+        let mut protected = Vec::new();
+        let mut prefix = "\u{e000}".to_string();
+        while out.contains(&prefix) {
+            prefix.push('\u{e000}');
+        }
+        out = PROTECTED
+            .replace_all(&out, |capture: &Captures| {
+                let index = protected.len();
+                protected.push(capture[0].to_string());
+                format!("{prefix}{index}\u{e001}")
+            })
+            .into_owned();
         for (re, to) in COMMANDS.iter() {
             out = re.replace_all(&out, *to).into_owned();
         }
@@ -63,6 +90,9 @@ pub fn normalize(input: &str, mode: &Mode, entries: &[Entry]) -> String {
             if let Some(c) = out.chars().next() {
                 out = c.to_uppercase().collect::<String>() + &out[c.len_utf8()..];
             }
+        }
+        for (index, value) in protected.iter().enumerate() {
+            out = out.replace(&format!("{prefix}{index}\u{e001}"), value);
         }
     }
     // Single pass substitutions: an entry's output cannot trigger another rule.
@@ -155,6 +185,31 @@ pub fn validate_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn english_disfluency_rules_do_not_remove_portuguese_words() {
+        let mode = local_mode(&Mode::Clean, "pt", Some("portuguese"));
+        assert_eq!(normalize("um pedido", &mode, &[]), "um pedido");
+        assert_eq!(local_mode(&Mode::Clean, "", Some("english")), Mode::Clean);
+        assert_eq!(local_mode(&Mode::Clean, "", None), Mode::Literal);
+    }
+    #[test]
+    fn cleanup_never_treats_identifier_contents_as_fillers() {
+        for value in [
+            "https://example.com/um",
+            "uh@example.com",
+            "`um new paragraph uh`",
+            "C:\\work\\uh",
+            "useState",
+            "std::vec",
+            "foo.bar",
+        ] {
+            assert_eq!(normalize(value, &Mode::Clean, &[]), value);
+        }
+        assert_eq!(
+            normalize("um email uh@example.com and useState", &Mode::Clean, &[]),
+            "Email uh@example.com and useState"
+        );
+    }
     #[test]
     fn literal_preserves_voice() {
         assert_eq!(

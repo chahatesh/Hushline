@@ -1,3 +1,3 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json", "identifier": "dashboard", "description": "Local dashboard and nonactivating dictation overlay", "windows": ["main", "overlay"], "permissions": ["core:default"]
+  "$schema": "../gen/schemas/desktop-schema.json", "identifier": "dashboard", "description": "Local dashboard. The native overlay has no webview or IPC access.", "windows": ["main"], "permissions": ["core:default"]
 }

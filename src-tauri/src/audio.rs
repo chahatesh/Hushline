@@ -246,10 +246,39 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
     let ratio = rate as f64 / 16000.0;
     let cutoff = (16000.0 / rate as f64).min(1.0) * 0.94;
     let len = (samples.len() as f64 / ratio).floor() as usize;
+    // Precompute phases once per recording instead of doing 32 sine/cosine calls
+    // for every output sample. This bounds filter work in the release hot path.
+    let phases: Vec<[f32; 32]> = (0..256)
+        .map(|phase| {
+            let mut row = [0.0f32; 32];
+            let fraction = phase as f64 / 256.0;
+            for (tap, w) in row.iter_mut().enumerate() {
+                let x = tap as f64 - 15.0 - fraction;
+                let z = std::f64::consts::PI * x * cutoff;
+                let sinc = if z.abs() < 1e-9 { 1.0 } else { z.sin() / z };
+                let window = 0.5 + 0.5 * (std::f64::consts::PI * x / 16.0).cos();
+                *w = (sinc * window * cutoff) as f32;
+            }
+            let total = row.iter().sum::<f32>();
+            for w in &mut row {
+                *w /= total;
+            }
+            row
+        })
+        .collect();
     (0..len)
         .map(|i| {
             let pos = i as f64 * ratio;
             let center = pos.floor() as isize;
+            let phase = ((pos - center as f64) * 256.0).floor().clamp(0.0, 255.0) as usize;
+            let row = &phases[phase];
+            if center >= 15 && center + 16 < samples.len() as isize {
+                return samples[(center - 15) as usize..(center + 17) as usize]
+                    .iter()
+                    .zip(row)
+                    .map(|(sample, w)| sample * w)
+                    .sum();
+            }
             let mut sum = 0.0;
             let mut weights = 0.0;
             for offset in -15isize..=16 {
@@ -257,18 +286,14 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
                 if index < 0 || index >= samples.len() as isize {
                     continue;
                 }
-                let x = index as f64 - pos;
-                let z = std::f64::consts::PI * x * cutoff;
-                let sinc = if z.abs() < 1e-9 { 1.0 } else { z.sin() / z };
-                let window = 0.5 + 0.5 * (std::f64::consts::PI * x / 16.0).cos();
-                let w = sinc * window * cutoff;
-                sum += samples[index as usize] as f64 * w;
+                let w = row[(offset + 15) as usize];
+                sum += samples[index as usize] * w;
                 weights += w;
             }
             if weights.abs() < 1e-9 {
                 0.0
             } else {
-                (sum / weights) as f32
+                sum / weights
             }
         })
         .collect()
@@ -276,6 +301,48 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Uses the actual default microphone briefly; no audio is uploaded or saved."]
+    fn microphone_start_and_cancel_without_upload() {
+        let inputs = devices().expect("microphone enumeration");
+        assert!(!inputs.is_empty(), "No input devices available");
+        let settings = Settings {
+            max_seconds: 5,
+            silence_seconds: 2,
+            ..Settings::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        let started = std::time::Instant::now();
+        let capture = start(settings, tx);
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Event::Ready => println!(
+                "Microphone activation to stream-ready: {} ms",
+                started.elapsed().as_millis()
+            ),
+            other => panic!("Microphone failed before activation: {other:?}"),
+        }
+        let mut metered = false;
+        for _ in 0..5 {
+            if let Event::Meter { seconds, .. } = rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                if seconds > 0.0 {
+                    metered = true;
+                    break;
+                }
+            }
+        }
+        assert!(metered, "No audio frames arrived");
+        capture.cancel();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                Event::Finished(Err(e)) => {
+                    assert_eq!(e, "Cancelled");
+                    break;
+                }
+                Event::Finished(Ok(_)) => panic!("Cancellation unexpectedly completed a recording"),
+                _ => {}
+            }
+        }
+    }
     #[test]
     fn resampler_keeps_duration_and_silence() {
         let v = resample(&vec![0.0; 48000], 48000);
