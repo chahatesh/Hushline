@@ -47,6 +47,7 @@ struct Session {
     command: bool,
     test: bool,
     cancelled: bool,
+    ready: bool,
 }
 struct Completed {
     text: String,
@@ -119,14 +120,7 @@ fn begin(
     let epoch = native::input_epoch();
     publish(app, state, |v| {
         v.phase = "listening".into();
-        v.message = if test {
-            "Testing microphone"
-        } else if command {
-            "Listening for an edit"
-        } else {
-            "Listening"
-        }
-        .into();
+        v.message = "Starting microphone".into();
         v.level = 0.0;
         v.seconds = 0.0;
         v.generation = id;
@@ -162,6 +156,7 @@ fn begin(
         command,
         test,
         cancelled: false,
+        ready: false,
     }
 }
 
@@ -468,13 +463,23 @@ async fn actor(
                         {
                             s.hands_free = true;
                             publish(&app, &state, |v| {
-                                v.message = "Listening · hands-free".into()
+                                v.message = if s.ready {
+                                    "Listening · hands-free"
+                                } else {
+                                    "Starting microphone"
+                                }
+                                .into()
                             });
                         }
                         Action::HandsFree if !s.hands_free => {
                             s.hands_free = true;
                             publish(&app, &state, |v| {
-                                v.message = "Listening · hands-free".into()
+                                v.message = if s.ready {
+                                    "Listening · hands-free"
+                                } else {
+                                    "Starting microphone"
+                                }
+                                .into()
                             });
                         }
                         Action::HandsFree => s.capture.stop(),
@@ -487,7 +492,14 @@ async fn actor(
                                 s.settings.selection_permission,
                                 epoch,
                             );
-                            publish(&app, &state, |v| v.message = "Listening for an edit".into());
+                            publish(&app, &state, |v| {
+                                v.message = if s.ready {
+                                    "Listening for an edit"
+                                } else {
+                                    "Starting microphone"
+                                }
+                                .into()
+                            });
                         }
                         _ => {}
                     }
@@ -549,7 +561,22 @@ async fn actor(
             }
             Message::Audio(id, audio::Event::Ready) => {
                 if id == generation {
-                    publish(&app, &state, |v| v.warning.clear());
+                    if let Some(s) = session.as_mut() {
+                        s.ready = true;
+                        publish(&app, &state, |v| {
+                            v.warning.clear();
+                            v.message = if s.test {
+                                "Testing microphone"
+                            } else if s.command {
+                                "Listening for an edit"
+                            } else if s.hands_free {
+                                "Listening · hands-free"
+                            } else {
+                                "Listening"
+                            }
+                            .into();
+                        });
+                    }
                 }
             }
             Message::Audio(id, audio::Event::Meter { level, seconds }) => {

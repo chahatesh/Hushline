@@ -61,11 +61,18 @@ pub fn start(settings: Settings, events: mpsc::Sender<Event>) -> Capture {
     });
     Capture { stop: stop_tx }
 }
+fn pending_stop(stop: &mpsc::Receiver<bool>) -> Result<(), String> {
+    match stop.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => Ok(()),
+        _ => Err("Cancelled".into()),
+    }
+}
 fn capture(
     s: &Settings,
     events: &mpsc::Sender<Event>,
     stop: mpsc::Receiver<bool>,
 ) -> Result<Recording, String> {
+    pending_stop(&stop)?;
     let host = cpal::default_host();
     let device = if s.microphone.is_empty() {
         host.default_input_device()
@@ -78,6 +85,7 @@ fn capture(
     let config = device
         .default_input_config()
         .map_err(|_| "Microphone is unavailable. Check Windows microphone privacy settings.")?;
+    pending_stop(&stop)?;
     let rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let max = (rate as usize)
@@ -124,6 +132,7 @@ fn capture(
         .map_err(|_| {
             "Could not start microphone capture. Check device access and Windows privacy settings."
         })?;
+    pending_stop(&stop)?;
     stream
         .play()
         .map_err(|_| "Could not activate the microphone.")?;
@@ -301,6 +310,17 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancellation_before_capture_never_opens_a_stream() {
+        let (stop, rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::channel();
+        stop.send(true).unwrap();
+        assert_eq!(
+            capture(&Settings::default(), &events, rx).unwrap_err(),
+            "Cancelled"
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
     #[test]
     #[ignore = "Uses the actual default microphone briefly; no audio is uploaded or saved."]
     fn microphone_start_and_cancel_without_upload() {
