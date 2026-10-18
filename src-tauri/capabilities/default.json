@@ -1,0 +1,3 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json", "identifier": "dashboard", "description": "Local dashboard and nonactivating dictation overlay", "windows": ["main", "overlay"], "permissions": ["core:default"]
+}
