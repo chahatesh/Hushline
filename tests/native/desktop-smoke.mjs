@@ -26,7 +26,8 @@ try {
   const before=await native(main,'snapshot');
   report.checks.nativeSnapshot=true;
   report.checks.noSecretInSettings=!('apiKey' in before.settings);
-  await main.screenshot({path:'docs/screenshots/windows-home.png',fullPage:true,animations:'disabled',timeout:20000});
+  // A developer may already have real dictation in their profile. Never publish it.
+  await main.screenshot({path:'docs/screenshots/windows-home.png',fullPage:true,animations:'disabled',timeout:20000,mask:[main.locator('.transcript-row'),main.locator('.recovery'),main.locator('.stat-strip')]});
   await main.getByRole('button',{name:'Dictionary',exact:true}).click();
   await main.getByLabel('Word or phrase').fill(word);await main.getByLabel('Replace with').fill('NativeSmoke');await main.getByRole('button',{name:'Add word',exact:true}).click();
   await main.getByRole('button',{name:`Edit ${word}`}).waitFor();addedWord=true;

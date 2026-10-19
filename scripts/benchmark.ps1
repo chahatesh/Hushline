@@ -29,7 +29,7 @@ try {
   $hardware = Get-CimInstance Win32_ComputerSystem
   $processor = Get-CimInstance Win32_Processor | Select-Object -First 1
   $report = [pscustomobject]@{
-    measuredAt=(Get-Date).ToUniversalTime().ToString('o'); executable=$binary; binarySha256=(Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash; configuration='release, background tray, no webviews created, native overlay hidden';
+    measuredAt=(Get-Date).ToUniversalTime().ToString('o'); executable=$binary; binarySha256=(Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash; configuration='release, background tray, no webviews created, resting native dock visible; no offline model resident';
     cpu=$processor.Name; logicalProcessors=[Environment]::ProcessorCount; systemMemoryGB=[math]::Round($hardware.TotalPhysicalMemory/1GB,1); os=[Environment]::OSVersion.VersionString;
     warmupSeconds=5; sampleSeconds=$sampleClock.Elapsed.TotalSeconds; processIds=@($ids);
     meanWorkingSetMB=[math]::Round(($samples | Measure-Object workingSetMB -Average).Average,2);

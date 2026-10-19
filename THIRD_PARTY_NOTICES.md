@@ -341,3 +341,6 @@ Original Hushline code is MIT-licensed. Dependencies retain their own licenses. 
 | zerovec-derive | 0.11.6 | Unicode-3.0 |
 | zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
+# Optional offline speech pack
+
+The optional download uses [whisper.cpp v1.9.2](https://github.com/ggml-org/whisper.cpp/tree/v1.9.2) and its ggml CPU backends under their upstream MIT terms. The downloaded Whisper model retains [OpenAI Whisper's MIT license](https://github.com/openai/whisper/blob/main/LICENSE). Exact upstream notices are in `docs/licenses` and copied beside the installed pack. Hushline does not claim ownership of the engine, weights, or their trademarks. Ollama and separately downloaded text models retain their own licenses and are not bundled.

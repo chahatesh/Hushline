@@ -1,11 +1,11 @@
 <p align="center"><img src="public/logo.svg" width="76" alt="Hushline original waveform logo"></p>
 <h1 align="center">Hushline</h1>
 <p align="center">A little less typing. A lot more you.</p>
-<p align="center"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2b4f8d"><img alt="Platform Windows 10 and 11" src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b"><img alt="Status pre-release" src="https://img.shields.io/badge/status-pre--release-c08436"></p>
+<p align="center"><a href="https://github.com/chahatesh/Hushline/actions/workflows/ci.yml"><img alt="Windows build" src="https://github.com/chahatesh/Hushline/actions/workflows/ci.yml/badge.svg"></a><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2b4f8d"><img alt="Platform Windows 10 and 11" src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-64748b"><img alt="Status pre-release" src="https://img.shields.io/badge/status-pre--release-c08436"></p>
 
-Hushline is an independent, open-source Windows dictation application built with Rust, Tauri 2, and SolidJS. Hold a shortcut, say what you mean, and insert the result in the field where you were working. Groq provides cloud speech recognition and optional text editing; you bring your own API key.
+Hushline is an independent, open-source Windows dictation application built with Rust, Tauri 2, and SolidJS. Hold a shortcut, say what you mean, and insert the result in the field where you were working. Choose Groq cloud recognition with your own API key, or download a local Whisper pack for offline dictation. Local automatic layout adds notes, bullets, and paragraphs without another AI call.
 
-**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The optimized background build measured 16.61 MiB working set and 3.61 MiB private memory in one documented 20-sample run; the dashboard consumes additional memory while open. Silent installation, native settings/key storage, microphone cancellation, and dashboard close/reopen passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
+**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The earlier 0.1 build measured 16.61 MiB working set and 3.61 MiB private memory in one documented 20-sample run; see the report for the current build; the dashboard consumes additional memory while open. Silent installation, native settings/key storage, microphone cancellation, and dashboard close/reopen passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
 
 Hushline is not affiliated with, endorsed by, or an official product of Wispr Flow. All project branding and original code were created independently.
 
@@ -16,7 +16,7 @@ Hushline is not affiliated with, endorsed by, or an official product of Wispr Fl
 - Push-to-talk, hands-free recording, editable shortcuts, optional double-tap activation, Escape cancellation, tray lifecycle, and a nonactivating waveform overlay.
 - Native WASAPI capture through CPAL, energy-based silence detection, bounded recording duration, in-memory 16 kHz mono WAV encoding, and asynchronous Groq speech requests.
 - Fast mode by default: Whisper transcription → conservative local cleanup → insertion. An extra text-model call happens only when enhanced/polished processing or a matching AI writing style is enabled, or in Command Mode.
-- Windows protection/focus checks, default Unicode input, optional guarded clipboard paste, and last-transcript recovery. Changed/unknown targets retain text for manual paste.
+- Windows protection/focus checks, default one-action clipboard paste with guarded restoration, optional compatibility Unicode typing, and last-transcript recovery. Changed/unknown targets retain text for manual paste.
 - SQLite history, personal dictionary, exact-trigger multiline snippets with previews, writing styles by executable name, scratchpad, statistics, and configuration backup.
 - Windows Credential Manager for the key, optional local history, no Hushline account, no telemetry, no subscription, and no artificial application usage cap. **Groq's real charges and rate limits still apply.**
 
@@ -24,10 +24,10 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 ## Install
 
-No public GitHub Release is available yet. Locally built artifacts, when generated, are in:
+Source is available at [chahatesh/Hushline](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. Locally built artifacts, when generated, are in:
 
-- `src-tauri/target/release/bundle/nsis/Hushline_0.1.0_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
-- `artifacts/Hushline_0.1.0_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
+- `src-tauri/target/release/bundle/nsis/Hushline_0.2.0_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
+- `artifacts/Hushline_0.2.0_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
 The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key and clear history in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 
@@ -36,7 +36,7 @@ The installer is unsigned unless a maintainer signs it with their own certificat
 - Windows 10 or Windows 11, x64; interactive desktop session.
 - Microsoft Edge WebView2 Runtime (the installer can download Microsoft's bootstrapper).
 - A working microphone and Windows microphone privacy permission for desktop apps.
-- Internet access to Groq and your own Groq API key. This is **cloud transcription**, not offline recognition.
+- For cloud mode: internet access to Groq and your own API key. For offline mode: a one-time 78 MB Tiny or 148 MB Base model download plus an 8 MB engine. No key or internet is needed for local transcription after installation. See [offline setup](docs/OFFLINE.md).
 - The target application must run at an integrity level Windows permits Hushline to interact with. Hushline does not request elevation or bypass protected input boundaries.
 
 ## First dictation
@@ -64,9 +64,20 @@ The default speech model is `whisper-large-v3-turbo`. Choose `whisper-large-v3` 
 
 Shortcuts can use modifiers, one letter/number/F-key/Space, or Mouse4/Mouse5. Duplicate assignments within Hushline are rejected. Other applications and Windows may intercept a shared shortcut; Hushline cannot universally detect another process's low-level hook. Modifier-only chords need at least two modifiers.
 
+
+### Offline, formatting, and the voice bar
+
+Choose **Settings → Offline**, select Tiny or Base, and download the verified pack. Select **On this computer** under General and save. Offline mode does not require a Groq key and never falls back to a cloud provider. For optional advanced local rewriting, see [Ollama setup](docs/OFFLINE.md).
+
+**Settings → Dictation → Automatic layout** can detect explicit notes and ordered lists, force notes or paragraphs, or leave layout unchanged. For example, “Meeting notes. First, review the draft. Second, send it to Maya.” becomes a heading and two bullets. Literal mode preserves layout. Automatic paragraph breaks use sentence boundaries; ambiguous speech and non-English conventions may require explicit “new paragraph” or optional AI editing.
+
+The **Voice bar** tab docks the native pill at the bottom, left, or right. It stays translucent and still at rest, expands only slightly, and becomes opaque during capture. Click it for hands-free mode, click × to cancel, or right-click to open the dashboard. It does not take keyboard focus. No animations run at rest.
+
+Shortcut releases no longer fall back into a shorter modifier-only chord. Hold-to-talk is stopped by release or the maximum duration, not the silence timeout. For Windows shortcut conflicts, choose **Shortcuts → Use dedicated-key shortcuts** or record your own combination with the keyboard button.
+
 ### Command Mode
 
-Enable **Allow Command Mode to read selected text** in Settings first. Select text in the target app, hold the Command Mode shortcut, and say an editing instruction. Hushline transcribes the instruction, sends only the selected text and instruction to Groq, and shows an edit preview. Approval may bring the original app forward, but replacement proceeds only if the field and selection still match. If access is unsupported or a selection changes, copy the edit instead. Hushline never executes terminal commands, sends messages, or submits forms as a voice action.
+Enable **Allow Command Mode to read selected text** in Settings first. Select text in the target app, hold the Command Mode shortcut, and say an editing instruction. Hushline transcribes the instruction, sends only the selected text and instruction to Groq (or your configured local Ollama model in offline mode), and shows an edit preview. Approval may bring the original app forward, but replacement proceeds only if the field and selection still match. If access is unsupported or a selection changes, copy the edit instead. Hushline never executes terminal commands, sends messages, or submits forms as a voice action.
 
 ### Dictionary, snippets, and styles
 
@@ -78,9 +89,9 @@ A snippet expands only when its trigger is the entire utterance. It supports mul
 
 The key is stored in Windows Credential Manager, not in SQLite, frontend assets, environment files, or logs. Your current Windows account is the trust boundary. Raw audio stays in memory and is released after processing/cancellation; it is never saved to an audio file. Audio already uploaded cannot be recalled by cancelling.
 
-Audio is sent to Groq for dictation. Text goes to Groq only for enabled AI processing or Command Mode; vocabulary hints also accompany speech requests. Groq's own data policies apply. Hushline has no telemetry or cloud history store. Local data lives in `%APPDATA%\io.chahatesh.hushline\hushline.sqlite` (the Tauri user app-data directory); it is not database-encrypted. Disable local history for private mode and clear existing records separately. Configuration backups exclude API keys, history, and scratchpad content.
+In cloud mode, audio is sent to Groq for dictation. In offline mode, it is piped to a local whisper.cpp process, with no cloud fallback. The local engine writes a temporary JSON transcript (no raw audio); it is deleted after processing. Offline models live under `%LOCALAPPDATA%\io.chahatesh.hushline\offline`. Text goes to Groq only for enabled AI processing or Command Mode; vocabulary hints also accompany speech requests. Groq's own data policies apply. Hushline has no telemetry or cloud history store. Local data lives in `%APPDATA%\io.chahatesh.hushline\hushline.sqlite` (the Tauri user app-data directory); it is not database-encrypted. Disable local history for private mode and clear existing records separately. Configuration backups exclude API keys, history, and scratchpad content.
 
-Clipboard mode snapshots supported global-memory formats, refuses unsafe/oversized snapshots, and restores only if the clipboard sequence still matches. It leaves newer copied content alone. Some apps read clipboard contents asynchronously, so universal paste verification is not possible. The default Unicode path avoids clipboard changes. It preserves multiline output for copying instead of typing Enter, which could submit a message; choose clipboard insertion for multiline paste. Delivery is reported conservatively; check your text before sending it.
+Clipboard mode snapshots supported global-memory formats, refuses unsafe/oversized snapshots, and restores only if the clipboard sequence still matches. It leaves newer copied content alone. Some apps read clipboard contents asynchronously, so universal paste verification is not possible. Compatibility Unicode typing is opt-in and avoids clipboard changes; paste is the default. It preserves multiline output for copying instead of typing Enter, which could submit a message; choose clipboard insertion for multiline paste. Delivery is reported conservatively; check your text before sending it.
 
 ## Develop and build
 

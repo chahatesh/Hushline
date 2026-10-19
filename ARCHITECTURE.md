@@ -48,3 +48,15 @@ SQLite uses WAL, secure deletion, parameterized statements, and a busy timeout. 
 ## Limits and future engineering
 
 Read docs/FEATURES.md for gaps. Long recordings are bounded to ten minutes rather than chunked; duplicate microphone display names are not yet disambiguated by persistent device ID. Browser-domain matching, arbitrary native rich-text insertion, robust semantic repair without AI, a signed updater, and broad application compatibility need additional work. A browser preview can review local UI collections only; it explicitly disables and does not simulate native behavior.
+
+## 0.2 changes
+
+`offline.rs` owns an opt-in verified speech pack, cancellable hidden whisper.cpp child processes and optional local Ollama editing. The cloud backend is selected explicitly; no inference error changes providers. Raw WAV goes through stdin; transcript JSON has a temporary-directory guard. Models and engine resources remain outside SQLite and configuration backups. The speech child loads on demand and exits after each recording, so the resting app does not retain model RAM.
+
+The hook router starts actions only on key-down edges, retains paired consumed key-up state, and never falls back to push-to-talk on a more specific chord's release. Held sessions carry a stop request so a new rapid press can replace a stopping capture. A shared atomic controls silence stopping for hands-free sessions; hold-to-talk ignores silence. Shortcut recording suspends actions with a 15-second native expiry.
+
+Clipboard paste is the default. Its final target check replaces two redundant UIA traversals that previously occurred in `insert`. The clipboard is still snapshotted before mutation and restored only while its sequence matches. Compatibility Unicode injection is an explicit single-line option, not an automatic fallback.
+
+The GDI overlay has an idle resting pill and bottom/left/right geometry. Only active processing and the 160-ms size/opacity transition use timers; microphone meter events repaint capture. Idle has no timer. It uses a double-buffered surface, a rounded window region, full active alpha, and `WS_EX_NOACTIVATE`. Dock/monitor changes snap rather than flying across the screen. Dashboard and native bar share settings but do not share a webview.
+
+`text::format` performs local structural whitespace/list transformations after normalization. It keeps existing explicit newlines and bypasses Literal/non-English transformations. Technical spans are excluded from sentence splitting. Optional AI cleanup remains a separate opt-in path.

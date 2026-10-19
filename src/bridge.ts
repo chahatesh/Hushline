@@ -3,8 +3,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { defaults, emptyView, type Snapshot, type Backup, type Settings } from './types';
 export const desktop = isTauri();
 const previewKey = 'hushline-browser-preview-v1';
-function initial(): Snapshot { return { settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
-function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) return { ...initial(), ...JSON.parse(stored), view: { ...emptyView } }; } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
+function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
+function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) { const parsed = JSON.parse(stored); return { ...initial(), ...parsed, settings: { ...defaults, ...parsed.settings }, view: { ...emptyView } }; } } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
 export async function call<T = void>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (desktop) return invoke<T>(command, args);
   // Browser-only UI review: no microphone, keys, cloud calls, or system input are simulated.
@@ -18,6 +18,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
     case 'save_styles': data.styles = args.entries as Snapshot['styles']; break;
     case 'save_scratchpad': data.scratchpad = String(args.content); break;
     case 'microphones': result = []; break;
+    case 'set_shortcut_capture': break;
     case 'delete_history': data.history = args.id ? data.history.filter(t => t.id !== args.id) : []; break;
     case 'export_configuration': result = { version: 1, settings: data.settings, dictionary: data.dictionary, snippets: data.snippets, styles: data.styles } satisfies Backup; break;
     case 'import_configuration': {
@@ -35,3 +36,12 @@ export function download(name: string, data: string, type = 'application/json') 
 export function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 export function words(text: string) { return text.trim() ? text.trim().split(/\s+/u).length : 0; }
 export function shortcutParts(shortcut: string) { return shortcut.split('+').map(s => s === 'Win' ? 'Win' : s === 'Space' ? 'Space' : s); }
+export function keyboardChord(e: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'code' | 'key'>) {
+  const parts = [e.ctrlKey && 'Ctrl', e.metaKey && 'Win', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean) as string[];
+  if (/^Key[A-Z]$/u.test(e.code)) parts.push(e.code.slice(3));
+  else if (/^Digit[0-9]$/u.test(e.code)) parts.push(e.code.slice(5));
+  else if (/^F(?:[1-9]|1[0-9]|2[0-4])$/u.test(e.key)) parts.push(e.key);
+  else if (e.code === 'Space') parts.push('Space');
+  else if (e.code === 'Escape') parts.push('Escape');
+  return parts.join('+');
+}

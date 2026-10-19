@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // UI behavior only. These tests do not claim native/Groq end-to-end acceptance.
 import { test, expect } from '@playwright/test';
-test.beforeEach(async ({ page }) => { await page.goto('/'); await page.evaluate(() => localStorage.clear()); await page.reload(); await expect(page.getByRole('heading', { name: 'Let your thoughts flow.' })).toBeVisible(); });
+test.beforeEach(async ({ page }) => { await page.goto('/'); await expect(page.getByRole('heading', { name: 'Let your thoughts flow.' })).toBeVisible(); });
 test('empty workspace, original branding, and honest native boundary', async ({ page }) => {
   await expect(page.getByText('Your first words belong here')).toBeVisible();
   await expect(page.getByText('Browser preview', { exact: true })).toBeVisible();
@@ -40,4 +40,42 @@ test('settings, private mode, dark theme and backup exclusion', async ({ page })
 });
 test('keyboard navigation and compact viewport remain usable', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 }); await page.keyboard.press('Tab'); await expect(page.locator(':focus')).toBeVisible(); await page.getByRole('button', { name: 'About', exact: true }).click(); await expect(page.getByText('Chahatesh', { exact: true })).toBeVisible(); await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 900);
+});
+
+test('offline selection, automatic layout, dock and paste preferences persist', async ({ page }) => {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: /On this computer/ }).click();
+  await expect(page.getByText('Open the Offline tab to download a speech pack.', { exact: false })).toBeVisible();
+  await page.getByRole('tab', { name: 'Dictation', exact: true }).click();
+  await expect(page.getByLabel('Text insertion', { exact: true })).toHaveValue('clipboard');
+  await page.getByLabel('Automatic layout', { exact: true }).selectOption('notes');
+  await page.getByRole('tab', { name: 'Voice bar', exact: true }).click();
+  await page.getByRole('button', { name: 'Left side', exact: true }).click();
+  await page.getByRole('button', { name: 'Preview active bar', exact: true }).click();
+  await expect(page.locator('.pill-preview')).toHaveClass(/expanded/u);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: 'docs/screenshots/voice-bar.png', fullPage: true, animations: 'disabled' });
+  await page.getByRole('tab', { name: 'Offline', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Download speech pack', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('button', { name: /On this computer/ })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('tab', { name: 'Dictation', exact: true }).click();
+  await expect(page.getByLabel('Automatic layout', { exact: true })).toHaveValue('notes');
+  await page.getByRole('tab', { name: 'Voice bar', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Left side', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('shortcut recorder and dedicated-key preset remain editable', async ({ page }) => {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Shortcuts', exact: true }).click();
+  await page.getByRole('button', { name: 'Use dedicated-key shortcuts', exact: true }).click();
+  await expect(page.getByLabel('Push-to-talk · hold', { exact: true })).toHaveValue('Ctrl+Shift+Space');
+  await page.getByRole('button', { name: 'Record Push-to-talk · hold', exact: true }).click();
+  await page.getByLabel('Push-to-talk · hold', { exact: true }).press('Control+Alt+R');
+  await expect(page.getByLabel('Push-to-talk · hold', { exact: true })).toHaveValue('Ctrl+Alt+R');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.reload();
+  await expect(page.locator('.dictate-card .keys')).toContainText('R');
 });
