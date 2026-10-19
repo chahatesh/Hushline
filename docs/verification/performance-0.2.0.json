@@ -1,0 +1,100 @@
+{
+  "measuredAt": "2026-10-19T23:54:42.6694110Z",
+  "binarySha256": "7E3B5E5D94C25E3E7260F730A904CC8F75FD99444FE282BA2E548975E543A19B",
+  "configuration": "release, background tray, no webviews created, resting native dock visible; no offline model resident",
+  "cpu": "12th Gen Intel(R) Core(TM) i5-1235U",
+  "logicalProcessors": 12,
+  "systemMemoryGB": 7.7,
+  "os": "Microsoft Windows NT 10.0.26300.0",
+  "warmupSeconds": 5,
+  "sampleSeconds": 22.2910511,
+  "meanWorkingSetMB": 15.94,
+  "peakWorkingSetMB": 15.94,
+  "meanPrivateMB": 3.46,
+  "cpuPercentAllLogicalProcessors": 0,
+  "startupToUsableUI": "not measured by this background benchmark",
+  "transcriptionLatency": "Live microphone-to-target latency not measured; offline file inference is recorded separately in update-0.2.0.json",
+  "samples": [
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    },
+    {
+      "workingSetMB": 15.94,
+      "privateMB": 3.46
+    }
+  ],
+  "version": "0.2.0"
+}

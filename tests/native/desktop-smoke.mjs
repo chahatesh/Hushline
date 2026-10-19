@@ -27,7 +27,7 @@ try {
   report.checks.nativeSnapshot=true;
   report.checks.noSecretInSettings=!('apiKey' in before.settings);
   // A developer may already have real dictation in their profile. Never publish it.
-  await main.screenshot({path:'docs/screenshots/windows-home.png',fullPage:true,animations:'disabled',timeout:20000,mask:[main.locator('.transcript-row'),main.locator('.recovery'),main.locator('.stat-strip')]});
+  await main.screenshot({path:'docs/screenshots/windows-home.png',fullPage:true,animations:'disabled',timeout:20000,maskColor:'#e4e9f0',mask:[main.locator('.transcript-row'),main.locator('.recovery'),main.locator('.stat-strip')]});
   await main.getByRole('button',{name:'Dictionary',exact:true}).click();
   await main.getByLabel('Word or phrase').fill(word);await main.getByLabel('Replace with').fill('NativeSmoke');await main.getByRole('button',{name:'Add word',exact:true}).click();
   await main.getByRole('button',{name:`Edit ${word}`}).waitFor();addedWord=true;
@@ -50,7 +50,7 @@ try {
   assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
   report.checks.nativeMicrophoneTestCancel=true;
   const backup=await native(main,'export_configuration');assert(!('apiKey' in backup)&&!('history' in backup)&&!('scratchpad' in backup));report.checks.nativeBackupExcludesSensitiveData=true;
-  report.checks.liveGroqToNotepad='not tested: no live key / foreground restriction';
+  report.checks.liveGroqToNotepad='not tested: no live provider request; native insertion harness could not acquire foreground';
   const closed=main.waitForEvent('close',{timeout:10000});
   execFileSync('powershell.exe',['-NoProfile','-File','scripts/close-owned-dashboard.ps1','-ApplicationProcessId',String(child.pid),'-Executable',executable],{windowsHide:true});
   await closed;main=undefined;

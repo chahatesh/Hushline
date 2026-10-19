@@ -1,0 +1,16 @@
+{
+  "configuration": "release executable, test-only CDP, actual native IPC",
+  "desktopBootObservedMs": 3896,
+  "checks": {
+    "nativeSnapshot": true,
+    "noSecretInSettings": true,
+    "nativeDictionaryPersisted": true,
+    "nativeCredentialUIRoundtrip": "skipped: existing key preserved",
+    "nativeMicrophoneTestCancel": true,
+    "nativeBackupExcludesSensitiveData": true,
+    "liveGroqToNotepad": "not tested: no live provider request; native insertion harness could not acquire foreground",
+    "nativeDashboardCloseTrayAndReopen": true
+  },
+  "error": null,
+  "version": "0.2.0"
+}

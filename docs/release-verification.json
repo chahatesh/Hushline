@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-18T17:04:33.8343133Z",
-  "evidence": "docs/QA.md and docs/verification/*.json. Silent per-user install/background launch/uninstall and real native dashboard checks passed. A valid Groq key and spoken interactive Notepad acceptance are still required; other checks remain false.",
+  "testedAt": "2026-10-19T23:54:42.6694110Z",
+  "evidence": "docs/QA.md and docs/verification/*0.2.0.json. Guarded per-user silent install/background launch/uninstall and native dashboard checks passed. Existing credential was preserved. Live microphone-to-Notepad acceptance, real clipboard insertion/restoration, selected-text editing, and an independent clean-machine build remain unverified; the release gate stays closed.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,

@@ -62,7 +62,7 @@ The first optimized executable and NSIS installer were generated successfully (7
 
 The native overlay appearance/nonactivation test passed, including forced painting of its empty initial state. A real startup exception was traced to an empty UTF-16 text buffer being passed to Windows DrawText; the guard and terminated buffer fixed it, and debug background startup then stayed alive. The release package is validated again below before handoff.
 
-## Final packaged-build result
+## 0.1.0 packaged-build baseline
 
 - Frozen-source Rust suite: **29 passed, 0 failed, 4 ignored** in the ordinary suite; Rust formatting and Clippy with warnings denied passed.
 - TypeScript unit tests: **4 passed**; interface tests: **6 passed**; TypeScript compilation and frontend lint passed.
@@ -73,3 +73,27 @@ The native overlay appearance/nonactivation test passed, including forced painti
 - **Still unverified:** live Groq speech, actual transcription-to-text delivery in Notepad/other apps, clipboard restoration after real insertion, protected-input compatibility, live Command Mode, multi-monitor/DPI scenarios, and a second-machine clean build. The interactive insertion test stopped when Windows refused foreground activation. The release gate remains closed.
 
 The sanitized JSON reports in verification/ are evidence for these specific tests. They are not live provider or full end-to-end acceptance results.
+
+## 0.2.0 update — 2026-10-19
+
+The shortcut overlap was reproduced as release-edge fall-through from HandsFree/Command/Paste to Push. The router now emits activation only on fresh key-down edges and preserves consumed key-up pairs. Regression coverage includes 100 rapid presses, modifier release order, plain Space, Escape while idle/active and more-specific chord release. The capture silence condition also incorrectly applied to hold-to-talk; it is now gated by the hands-free state. A stopping capture can be replaced by a new quick press.
+
+Executed checks: 39 Rust unit tests, 5 TypeScript tests and 8 browser UI tests passed; formatting and Clippy with warnings denied passed. Browser checks cover the offline selection, automatic layout, default paste, dock persistence and preview, and recorded/preset shortcuts, in addition to the original CRUD/private-mode/backup tests. An initial browser cold-start timeout was removed by eliminating a redundant setup navigation in fresh test contexts. A select label was made explicit. Visual inspection caught and corrected a CSS layer-order regression before delivery. Screenshots were reviewed after the fix.
+
+The real offline test downloaded and SHA-256-verified the official CPU engine and Tiny model, piped the upstream JFK WAV into the engine, parsed real output and verified a phrase from the recording. It passed. One transcription measured 2,751 ms for the approximately 11-second speech fixture; this does not prove live microphone-to-application or cloud acceptance. Raw audio was not saved by the pipeline. Actual Ollama rewriting remains unverified.
+
+The public repository was created with the owner's authorization at https://github.com/chahatesh/Hushline. Installer, native runtime and idle measurements for the packaged revision are recorded below when executed. No public release tag is created while core acceptance is incomplete.
+
+Native bar validation passed: no foreground activation, 216×40 logical-pixel bottom active size, 40×156 side active size, 24×64 side resting size, alpha 255 while active, and the hidden-idle option. Real microphone frames and cancellation passed again, with one 2,221 ms stream-ready observation while release compilation was active. This does not meet the startup ambition and is not presented as a latency guarantee. The native insertion test was reattempted and Windows again refused foreground acquisition before text dispatch; paste/restoration remains unverified in a real target application. The clipboard sentinel guard ran on exit. No focus/security restriction was bypassed.
+
+### Packaged 0.2.0 verification
+
+The final optimized executable and NSIS package built successfully. Installer: 2,793,040 bytes, SHA-256 `05681c9de727683ebd77a8ca57f41002d6375192df74d1a04c9e3211058d18c5`. A portable ZIP with original and dependency licenses was also generated.
+
+- Real Tauri IPC/dashboard smoke passed: snapshot/secret exclusion, dictionary add/reload/delete, microphone frames/cancellation without a history entry, backup exclusion, close-to-tray and reopen through a second launch. An existing API key was detected and preserved; it was not read, replaced or used for a cloud request. The native screenshot masks sensitive history/statistics regions.
+- The actual NSIS package passed per-user silent installation, installed background launch, dependency-license presence, and uninstallation in a new workspace-owned directory. The user profile was retained. Interactive wizard, upgrade and broad application compatibility remain unverified.
+- Fresh-background working set averaged 15.94 MiB, private memory 3.46 MiB; CPU rounded to 0.000% across all logical processors. Dashboard heading observed at 3896 ms, including test setup overhead. Methodology and limits are in PERFORMANCE.md.
+- The latest instrumented real microphone run reached stream-ready in 2,006 ms (device 12 ms, format 13 ms, stream built 2,005 ms). This identifies a Windows stream-creation delay; the startup ambition remains unmet.
+- Release verification now compares evidence with the package version rather than a stale literal. It correctly rejects the incomplete acceptance report. No release tag or GitHub Release was created.
+
+See [native desktop](verification/desktop-smoke-0.2.0.json), [installer](verification/installer-test-0.2.0.json), and [update record](verification/update-0.2.0.json). Live provider-to-application delivery, real paste/restoration, actual Ollama editing, Base accuracy, mixed-DPI monitors and independent clean-machine acceptance remain open.
