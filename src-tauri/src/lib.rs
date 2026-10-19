@@ -4,6 +4,7 @@ mod engine;
 mod groq;
 mod model;
 mod native;
+mod offline;
 mod shortcuts;
 mod store;
 mod text;

@@ -13,6 +13,13 @@ pub enum Mode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default)]
+    pub preferences_version: u32,
+    pub provider: String,
+    pub offline_model: String,
+    pub local_text_model: String,
+    pub formatting: String,
+    pub dock: String,
     pub microphone: String,
     pub speech_model: String,
     pub cleanup_model: String,
@@ -35,6 +42,12 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            preferences_version: 2,
+            provider: "groq".into(),
+            offline_model: "tiny".into(),
+            local_text_model: String::new(),
+            formatting: "auto".into(),
+            dock: "bottom".into(),
             microphone: String::new(),
             speech_model: "whisper-large-v3-turbo".into(),
             cleanup_model: "openai/gpt-oss-20b".into(),
@@ -50,14 +63,38 @@ impl Default for Settings {
             vad_threshold: 0.012,
             double_tap: false,
             theme: "system".into(),
-            insertion: "unicode".into(),
+            insertion: "clipboard".into(),
             shortcuts: Shortcuts::default(),
         }
     }
 }
 
 impl Settings {
+    pub fn migrate(&mut self) -> bool {
+        if self.preferences_version >= 2 {
+            return false;
+        }
+        // v0.1 shipped character injection as the default. Prefer one paste on upgrade.
+        self.insertion = "clipboard".into();
+        self.preferences_version = 2;
+        true
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if !["groq", "offline"].contains(&self.provider.as_str())
+            || !["tiny", "base"].contains(&self.offline_model.as_str())
+            || !["auto", "paragraphs", "notes", "off"].contains(&self.formatting.as_str())
+            || !["bottom", "left", "right", "hidden"].contains(&self.dock.as_str())
+        {
+            return Err("Invalid dictation, formatting, or dock preference.".into());
+        }
+        if self.local_text_model.len() > 128
+            || self
+                .local_text_model
+                .chars()
+                .any(|c| !c.is_ascii_alphanumeric() && !"-_.:/".contains(c))
+        {
+            return Err("Invalid local text model name.".into());
+        }
         if !(5..=600).contains(&self.max_seconds) {
             return Err("Maximum recording must be 5–600 seconds.".into());
         }
@@ -182,6 +219,7 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub offline: crate::offline::Status,
     pub settings: Settings,
     pub dictionary: Vec<Entry>,
     pub snippets: Vec<Snippet>,
@@ -210,5 +248,17 @@ mod tests {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!json.contains("apiKey"));
         assert!(!json.contains("gsk_"));
+    }
+    #[test]
+    fn legacy_settings_upgrade_to_paste_once_without_losing_the_shortcut() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"insertion":"unicode","shortcuts":{"push":"Ctrl+Alt+R"}}"#)
+                .unwrap();
+        assert!(settings.migrate());
+        assert_eq!(settings.insertion, "clipboard");
+        assert_eq!(settings.shortcuts.push, "Ctrl+Alt+R");
+        settings.insertion = "unicode".into();
+        assert!(!settings.migrate());
+        assert_eq!(settings.insertion, "unicode");
     }
 }

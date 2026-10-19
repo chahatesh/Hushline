@@ -4,7 +4,10 @@ use crate::model::Settings;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
     io::Cursor,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -21,8 +24,12 @@ pub struct Recording {
 }
 pub struct Capture {
     stop: mpsc::Sender<bool>,
+    silence: Arc<AtomicBool>,
 }
 impl Capture {
+    pub fn stop_on_silence(&self, enabled: bool) {
+        self.silence.store(enabled, Ordering::Relaxed);
+    }
     pub fn stop(&self) {
         let _ = self.stop.send(false);
     }
@@ -55,11 +62,16 @@ pub fn devices() -> Result<Vec<String>, String> {
 }
 pub fn start(settings: Settings, events: mpsc::Sender<Event>) -> Capture {
     let (stop_tx, stop_rx) = mpsc::channel();
+    let silence = Arc::new(AtomicBool::new(false));
+    let silence_worker = silence.clone();
     std::thread::spawn(move || {
-        let result = capture(&settings, &events, stop_rx);
+        let result = capture(&settings, &events, stop_rx, &silence_worker);
         let _ = events.send(Event::Finished(result));
     });
-    Capture { stop: stop_tx }
+    Capture {
+        stop: stop_tx,
+        silence,
+    }
 }
 fn pending_stop(stop: &mpsc::Receiver<bool>) -> Result<(), String> {
     match stop.try_recv() {
@@ -71,8 +83,11 @@ fn capture(
     s: &Settings,
     events: &mpsc::Sender<Event>,
     stop: mpsc::Receiver<bool>,
+    silence: &AtomicBool,
 ) -> Result<Recording, String> {
     pending_stop(&stop)?;
+    #[cfg(test)]
+    let setup_clock = std::time::Instant::now();
     let host = cpal::default_host();
     let device = if s.microphone.is_empty() {
         host.default_input_device()
@@ -82,10 +97,20 @@ fn capture(
             .find(|d| d.name().is_ok_and(|n| n == s.microphone))
     }
     .ok_or("Selected microphone is unavailable. Reconnect it or choose another in Settings.")?;
+    #[cfg(test)]
+    eprintln!(
+        "Microphone setup: device selected at {} ms",
+        setup_clock.elapsed().as_millis()
+    );
     let config = device
         .default_input_config()
         .map_err(|_| "Microphone is unavailable. Check Windows microphone privacy settings.")?;
     pending_stop(&stop)?;
+    #[cfg(test)]
+    eprintln!(
+        "Microphone setup: format ready at {} ms",
+        setup_clock.elapsed().as_millis()
+    );
     let rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let max = (rate as usize)
@@ -133,6 +158,11 @@ fn capture(
             "Could not start microphone capture. Check device access and Windows privacy settings."
         })?;
     pending_stop(&stop)?;
+    #[cfg(test)]
+    eprintln!(
+        "Microphone setup: stream built at {} ms",
+        setup_clock.elapsed().as_millis()
+    );
     stream
         .play()
         .map_err(|_| "Could not activate the microphone.")?;
@@ -155,7 +185,13 @@ fn capture(
             seconds: frames as f32 / rate as f32,
         });
         if frames >= max
-            || frames.saturating_sub(d.last_voice) > rate as usize * s.silence_seconds as usize
+            || silence_expired(
+                frames,
+                d.last_voice,
+                rate,
+                s.silence_seconds,
+                silence.load(Ordering::Relaxed),
+            )
         {
             break;
         }
@@ -197,6 +233,15 @@ fn capture(
         wav: cursor.into_inner(),
         duration_ms,
     })
+}
+fn silence_expired(
+    frames: usize,
+    last_voice: usize,
+    rate: u32,
+    seconds: u32,
+    hands_free: bool,
+) -> bool {
+    hands_free && frames.saturating_sub(last_voice) > rate as usize * seconds as usize
 }
 fn stream<T>(
     device: &cpal::Device,
@@ -316,7 +361,7 @@ mod tests {
         let (events, event_rx) = mpsc::channel();
         stop.send(true).unwrap();
         assert_eq!(
-            capture(&Settings::default(), &events, rx).unwrap_err(),
+            capture(&Settings::default(), &events, rx, &AtomicBool::new(false)).unwrap_err(),
             "Cancelled"
         );
         assert!(event_rx.try_recv().is_err());
@@ -362,6 +407,11 @@ mod tests {
                 _ => {}
             }
         }
+    }
+    #[test]
+    fn push_to_talk_does_not_stop_during_a_pause() {
+        assert!(!silence_expired(160000, 0, 16000, 8, false));
+        assert!(silence_expired(160000, 0, 16000, 8, true));
     }
     #[test]
     fn resampler_keeps_duration_and_silence() {

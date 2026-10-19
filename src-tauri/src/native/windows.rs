@@ -268,13 +268,6 @@ pub fn insert(
     } else if input_epoch() != target.epoch {
         return Err("Focus or cursor changed. Your transcript is ready to copy.".into());
     }
-    let current = capture_target(!target.selected.is_empty())?;
-    if !target_matches(target, &current, authorized_preview) {
-        return Err(
-            "The original text field or selection changed. Your transcript is ready to copy."
-                .into(),
-        );
-    }
     // Never send shortcuts while the user's modifiers are physically held.
     for _ in 0..80 {
         if cancel.is_cancelled() {
@@ -296,15 +289,17 @@ pub fn insert(
     } {
         return Err("Release keyboard modifiers, then paste the saved transcript.".into());
     }
-    let final_check = capture_target(!target.selected.is_empty())?;
-    if !target_matches(target, &final_check, authorized_preview) {
-        return Err("The target changed before insertion. Transcript preserved.".into());
-    }
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
     if method == "clipboard" {
+        // paste_text performs the final UIA check after preparing the clipboard.
+        // Avoid two redundant provider traversals on the insertion critical path.
         return super::clipboard::paste_text(target, text, authorized_preview, cancel);
+    }
+    let final_check = capture_target(!target.selected.is_empty())?;
+    if !target_matches(target, &final_check, authorized_preview) {
+        return Err("The target changed before insertion. Transcript preserved.".into());
     }
     unicode_text(text)?;
     Ok("Inserted using Windows Unicode input. The receiving application does not provide a delivery receipt.".into())

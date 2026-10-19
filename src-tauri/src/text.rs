@@ -148,6 +148,146 @@ pub fn expand(input: &str, snippets: &[Snippet]) -> Option<(String, bool)> {
             )
         })
 }
+
+/// Structural formatting runs locally; it only changes whitespace, list markers,
+/// and sentence-initial case. Literal mode and non-English speech bypass it.
+pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
+    if layout == "off" || *mode == Mode::Literal || input.trim().is_empty() {
+        return input.to_string();
+    }
+    static HEADING: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^(?:(?:here are|these are) (?:my |the )?)?((?:my )?(?:meeting notes|notes|action items|shopping list|to.do list|bullet points))\s*[.!:]?\s+").unwrap()
+    });
+    static ITEM: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)(?:\s+(?:point|item))?\s*[,.:]\s*").unwrap()
+    });
+    let capital = |s: &str| {
+        let s = s.trim();
+        if PROTECTED.find(s).is_some_and(|m| m.start() == 0) {
+            return s.to_string();
+        }
+        match s.chars().next() {
+            Some(c) => c.to_uppercase().collect::<String>() + &s[c.len_utf8()..],
+            None => String::new(),
+        }
+    };
+    let heading = HEADING.captures(input);
+    let body = heading
+        .as_ref()
+        .map(|h| &input[h.get(0).unwrap().end()..])
+        .unwrap_or(input);
+    let markers: Vec<_> = ITEM.captures_iter(body).collect();
+    let ordered = markers.len() >= 2
+        && markers.iter().enumerate().all(|(i, c)| {
+            [
+                "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+                "ninth", "tenth",
+            ]
+            .get(i)
+            .is_some_and(|v| c[1].eq_ignore_ascii_case(v))
+        })
+        && body[..markers[0].get(0).unwrap().start()].trim().is_empty();
+    if layout != "paragraphs" && ordered {
+        let mut items = Vec::new();
+        for (i, marker) in markers.iter().enumerate() {
+            let end = markers
+                .get(i + 1)
+                .map(|c| c.get(0).unwrap().start())
+                .unwrap_or(body.len());
+            let item = body[marker.get(0).unwrap().end()..end].trim();
+            if item.is_empty() {
+                return input.to_string();
+            }
+            items.push(format!("• {}", capital(item)));
+        }
+        let prefix = heading
+            .map(|h| format!("{}:\n", capital(&h[1])))
+            .unwrap_or_default();
+        return prefix + &items.join("\n");
+    }
+    // Existing explicit paragraphs/bullets are already intentional.
+    if input.contains('\n') {
+        return input.to_string();
+    }
+    let parts = sentences(body);
+    if (layout == "notes" || (heading.is_some() && layout == "auto")) && parts.len() >= 2 {
+        let prefix = heading
+            .map(|h| format!("{}:\n", capital(&h[1])))
+            .unwrap_or_default();
+        return prefix
+            + &parts
+                .iter()
+                .map(|s| format!("• {}", capital(s)))
+                .collect::<Vec<_>>()
+                .join("\n");
+    }
+    if parts.len() < 3 || (layout == "auto" && input.chars().count() < 260) {
+        return input.to_string();
+    }
+    let mut paragraphs = Vec::new();
+    let mut paragraph = String::new();
+    let mut count = 0;
+    for sentence in sentences(input) {
+        let lower = sentence.to_lowercase();
+        let transition = [
+            "separately,",
+            "on another note,",
+            "moving on,",
+            "in other news,",
+        ]
+        .iter()
+        .any(|v| lower.starts_with(v));
+        if !paragraph.is_empty()
+            && (count >= 3 || (count >= 2 && paragraph.len() >= 200) || transition)
+        {
+            paragraphs.push(std::mem::take(&mut paragraph));
+            count = 0;
+        }
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(sentence);
+        count += 1;
+    }
+    if !paragraph.is_empty() {
+        paragraphs.push(paragraph);
+    }
+    paragraphs.join("\n\n")
+}
+
+fn sentences(input: &str) -> Vec<&str> {
+    let protected: Vec<_> = PROTECTED.find_iter(input).map(|m| m.range()).collect();
+    let mut result = Vec::new();
+    let mut start = 0;
+    for (index, c) in input.char_indices() {
+        if !matches!(c, '.' | '!' | '?') || protected.iter().any(|r| r.contains(&index)) {
+            continue;
+        }
+        let after = index + c.len_utf8();
+        if after == input.len() || !input[after..].starts_with(char::is_whitespace) {
+            continue;
+        }
+        let word = input[start..after]
+            .split_whitespace()
+            .next_back()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if [
+            "mr.", "mrs.", "ms.", "dr.", "prof.", "e.g.", "i.e.", "vs.", "etc.",
+        ]
+        .contains(&word.as_str())
+            || (word.len() == 2 && word.as_bytes()[0].is_ascii_alphabetic())
+        {
+            continue;
+        }
+        result.push(input[start..after].trim());
+        start = after;
+    }
+    if !input[start..].trim().is_empty() {
+        result.push(input[start..].trim());
+    }
+    result
+}
 pub fn validate_entries(
     entries: &[Entry],
     snippets: &[Snippet],
@@ -185,6 +325,45 @@ pub fn validate_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn formats_explicit_notes_and_ordered_lists_without_an_ai_call() {
+        assert_eq!(format("Meeting notes. First, ship the release. Second, email Maya. Third, update the docs.", "auto", &Mode::Clean), "Meeting notes:\n• Ship the release.\n• Email Maya.\n• Update the docs.");
+        assert_eq!(
+            format(
+                "Notes: The build passed. The installer needs review.",
+                "auto",
+                &Mode::Clean
+            ),
+            "Notes:\n• The build passed.\n• The installer needs review."
+        );
+        assert_eq!(
+            format(
+                "First, check useState. Second, visit https://example.com/a.",
+                "auto",
+                &Mode::Clean
+            ),
+            "• Check useState.\n• Visit https://example.com/a."
+        );
+    }
+    #[test]
+    fn formatting_preserves_ordinary_speech_identifiers_and_literal_mode() {
+        for text in [
+            "The first time was the second test.",
+            "Dr. Smith uses foo.bar and my_var.",
+            "Email a@b.com. Visit https://example.com/x.",
+        ] {
+            assert_eq!(format(text, "auto", &Mode::Clean), text);
+            assert_eq!(format(text, "notes", &Mode::Literal), text);
+        }
+        assert_eq!(
+            format(
+                "One sentence. Another sentence. A third sentence. Last sentence.",
+                "paragraphs",
+                &Mode::Clean
+            ),
+            "One sentence. Another sentence. A third sentence.\n\nLast sentence."
+        );
+    }
     #[test]
     fn english_disfluency_rules_do_not_remove_portuguese_words() {
         let mode = local_mode(&Mode::Clean, "pt", Some("portuguese"));

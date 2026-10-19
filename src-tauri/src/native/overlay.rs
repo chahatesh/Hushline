@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Nonactivating native overlay. No WebView, idle animation, or audio dependency.
-use crate::{model::View, shortcuts::Action};
+use crate::{
+    model::{Settings, View},
+    shortcuts::Action,
+};
 use std::{
     cell::Cell,
     rc::Rc,
@@ -8,7 +11,7 @@ use std::{
         atomic::{AtomicIsize, Ordering},
         mpsc, Arc, Mutex, OnceLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::{
     core::{w, BOOL},
@@ -30,6 +33,8 @@ struct OverlayView {
     message: String,
     level: f32,
     seconds: f32,
+    dock: String,
+    theme: String,
 }
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
 struct Painter {
@@ -41,6 +46,12 @@ struct Painter {
     small: Cell<HFONT>,
     animated: bool,
     alpha: Cell<u8>,
+    layout: Cell<(bool, u8)>,
+    from: Cell<RECT>,
+    to: Cell<RECT>,
+    fade_from: Cell<u8>,
+    fade_to: Cell<u8>,
+    transition: Cell<Option<Instant>>,
     claimed: Rc<Cell<bool>>,
 }
 impl Drop for Painter {
@@ -93,7 +104,13 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             font: Cell::new(HFONT::default()),
             small: Cell::new(HFONT::default()),
             animated: animations.as_bool(),
-            alpha: Cell::new(245),
+            alpha: Cell::new(165),
+            layout: Cell::new((false, 255)),
+            from: Cell::new(RECT::default()),
+            to: Cell::new(RECT::default()),
+            fade_from: Cell::new(165),
+            fade_to: Cell::new(165),
+            transition: Cell::new(None),
             claimed: claimed.clone(),
         });
         let pointer = Rc::into_raw(painter);
@@ -147,6 +164,8 @@ pub fn update(view: &View) {
                 message: view.message.clone(),
                 level: view.level,
                 seconds: view.seconds,
+                dock: v.dock.clone(),
+                theme: v.theme.clone(),
             };
         }
         let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
@@ -190,7 +209,66 @@ unsafe fn fonts(hwnd: HWND, p: &Painter) {
     p.font.set(make(12));
     p.small.set(make(9));
 }
-unsafe fn position(hwnd: HWND, p: &Painter) {
+pub fn configure(settings: &Settings) {
+    if let Some(bridge) = BRIDGE.get() {
+        if let Ok(mut v) = bridge.view.lock() {
+            v.dock = settings.dock.clone();
+            v.theme = settings.theme.clone();
+        }
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _)),
+                UPDATE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+}
+fn dock_id(value: &str) -> u8 {
+    match value {
+        "left" => 1,
+        "right" => 2,
+        "hidden" => 3,
+        _ => 0,
+    }
+}
+fn dimensions(active: bool, side: bool) -> (f64, f64) {
+    match (active, side) {
+        (false, false) => (72.0, 24.0),
+        (true, false) => (216.0, 40.0),
+        (false, true) => (24.0, 64.0),
+        (true, true) => (40.0, 156.0),
+    }
+}
+unsafe fn geometry(hwnd: HWND, _p: &Painter, rect: RECT) {
+    let _ = SetWindowPos(
+        hwnd,
+        Some(HWND_TOPMOST),
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let height = rect.bottom - rect.top;
+    let width = rect.right - rect.left;
+    let radius = height.min(width);
+    let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+    if SetWindowRgn(hwnd, Some(region), true) == 0 {
+        let _ = DeleteObject(HGDIOBJ(region.0));
+    }
+}
+unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
+    let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
+    let active = view.phase != "idle" && !view.phase.is_empty();
+    let dock = dock_id(&view.dock);
+    if !active && dock == 3 {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        let _ = KillTimer(Some(hwnd), 2);
+        p.layout.set((active, dock));
+        return;
+    }
     let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -201,26 +279,49 @@ unsafe fn position(hwnd: HWND, p: &Painter) {
     }
     fonts(hwnd, p);
     let scale = p.dpi.get() as f64 / 96.0;
-    let width = (360.0 * scale) as i32;
-    let height = (64.0 * scale) as i32;
-    let x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2;
-    let y = info.rcWork.bottom - height - (18.0 * scale) as i32;
-    let _ = SetWindowPos(
-        hwnd,
-        Some(HWND_TOPMOST),
-        x,
-        y,
-        width,
-        height,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-    );
-    // A synchronous WM_DPICHANGED may have resized the popup during SetWindowPos.
-    let mut client = RECT::default();
-    let _ = GetClientRect(hwnd, &mut client);
-    let radius = (28.0 * p.dpi.get() as f64 / 96.0) as i32;
-    let region = CreateRoundRectRgn(0, 0, client.right + 1, client.bottom + 1, radius, radius);
-    if SetWindowRgn(hwnd, Some(region), true) == 0 {
-        let _ = DeleteObject(HGDIOBJ(region.0));
+    let (width, height) = dimensions(active, dock == 1 || dock == 2);
+    let width = (width * scale) as i32;
+    let height = (height * scale) as i32;
+    let gap = ((if active { 14.0 } else { 8.0 }) * scale) as i32;
+    let (x, y) = match dock {
+        1 => (
+            info.rcWork.left + gap,
+            info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2,
+        ),
+        2 => (
+            info.rcWork.right - width - gap,
+            info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2,
+        ),
+        _ => (
+            info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2,
+            info.rcWork.bottom - height - gap,
+        ),
+    };
+    let rect = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    };
+    let alpha = if active { 255 } else { 165 };
+    let mut from = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut from);
+    let visible = IsWindowVisible(hwnd).as_bool();
+    p.from.set(from);
+    p.to.set(rect);
+    p.fade_from.set(p.alpha.get());
+    p.fade_to.set(alpha);
+    // Mark the layout before SetWindowPos can synchronously reenter for DPI changes.
+    p.layout.set((active, dock));
+    if animate && visible && p.animated {
+        p.transition.set(Some(Instant::now()));
+        SetTimer(Some(hwnd), 2, 16, None);
+    } else {
+        p.transition.set(None);
+        let _ = KillTimer(Some(hwnd), 2);
+        p.alpha.set(alpha);
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        geometry(hwnd, p, rect);
     }
 }
 unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) {
@@ -245,117 +346,186 @@ unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) 
 unsafe fn paint(hwnd: HWND, p: &Painter) {
     fonts(hwnd, p);
     let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
+    let active = view.phase != "idle" && !view.phase.is_empty();
+    let side = matches!(dock_id(&view.dock), 1 | 2);
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let mut client = RECT::default();
     let _ = GetClientRect(hwnd, &mut client);
-    let brush = CreateSolidBrush(if view.phase == "error" {
-        rgb(59, 40, 49)
+    // Double buffer the GDI surface so voice updates do not flicker.
+    let dc = CreateCompatibleDC(Some(hdc));
+    let bitmap = CreateCompatibleBitmap(hdc, client.right.max(1), client.bottom.max(1));
+    let old_bitmap = SelectObject(dc, HGDIOBJ(bitmap.0));
+    let light_theme = view.theme == "light";
+    let background = if view.phase == "error" {
+        rgb(84, 40, 45)
+    } else if light_theme {
+        rgb(241, 245, 251)
     } else {
-        rgb(31, 44, 65)
-    });
-    let _ = FillRect(hdc, &client, brush);
+        rgb(27, 35, 48)
+    };
+    let brush = CreateSolidBrush(background);
+    let _ = FillRect(dc, &client, brush);
     let _ = DeleteObject(HGDIOBJ(brush.0));
-    let _ = SetBkMode(hdc, TRANSPARENT);
+    let _ = SetBkMode(dc, TRANSPARENT);
     let s = p.dpi.get() as f64 / 96.0;
     let px = |n: f64| (n * s).round() as i32;
-    let light = rgb(241, 246, 255);
-    let muted = rgb(163, 182, 211);
-    let blue = rgb(174, 203, 250);
-    let pen = CreatePen(PS_SOLID, px(2.0).max(1), blue);
-    let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
-    let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    let _ = RoundRect(
-        hdc,
-        px(18.0),
-        px(17.0),
-        px(27.0),
-        px(34.0),
-        px(8.0),
-        px(8.0),
-    );
-    let _ = Arc(
-        hdc,
-        px(14.0),
-        px(20.0),
-        px(31.0),
-        px(40.0),
-        px(14.0),
-        px(28.0),
-        px(31.0),
-        px(28.0),
-    );
-    let _ = MoveToEx(hdc, px(22.0), px(38.0), None);
-    let _ = LineTo(hdc, px(22.0), px(44.0));
-    let _ = SelectObject(hdc, old_pen);
-    let _ = SelectObject(hdc, old_brush);
-    let _ = DeleteObject(HGDIOBJ(pen.0));
-    text(
-        hdc,
-        &view.message,
-        RECT {
-            left: px(43.0),
-            top: px(12.0),
-            right: px(266.0),
-            bottom: px(34.0),
-        },
-        p.font.get(),
-        light,
-    );
-    let detail = match view.phase.as_str() {
-        "listening" => format!("{:.1}s · Esc to cancel", view.seconds),
-        "processing" => "Processing securely".into(),
-        "error" => "Open Hushline for details".into(),
-        "preview" => "Review in Hushline".into(),
-        _ => "Your words, wherever you work".into(),
+    let width = client.right as f64 / s;
+    let height = client.bottom as f64 / s;
+    let color = if light_theme {
+        rgb(43, 68, 102)
+    } else {
+        rgb(218, 231, 249)
     };
-    text(
-        hdc,
-        &detail,
-        RECT {
-            left: px(43.0),
-            top: px(33.0),
-            right: px(266.0),
-            bottom: px(50.0),
-        },
-        p.small.get(),
-        muted,
-    );
-    let wave_brush = CreateSolidBrush(blue);
-    let previous = SelectObject(hdc, HGDIOBJ(wave_brush.0));
-    let previous_pen = SelectObject(hdc, GetStockObject(NULL_PEN));
-    for i in 0..11 {
-        let variation = ((i as f32 * 1.71 + p.tick.get() as f32 * 0.45).sin().abs() * 0.75) + 0.25;
-        let activity = if view.phase == "processing" {
-            0.65
+    let accent = if view.phase == "error" {
+        rgb(255, 184, 174)
+    } else if view.phase == "success" {
+        rgb(142, 220, 180)
+    } else {
+        rgb(158, 190, 237)
+    };
+    if !active {
+        let brush = CreateSolidBrush(accent);
+        let previous = SelectObject(dc, HGDIOBJ(brush.0));
+        let pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        let (w, h) = if side { (3.0, 22.0) } else { (26.0, 3.0) };
+        let _ = RoundRect(
+            dc,
+            px((width - w) / 2.0),
+            px((height - h) / 2.0),
+            px((width + w) / 2.0),
+            px((height + h) / 2.0),
+            px(3.0),
+            px(3.0),
+        );
+        let _ = SelectObject(dc, previous);
+        let _ = SelectObject(dc, pen);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+    } else {
+        let cx = if side { width / 2.0 } else { 23.0 };
+        let cy = if side { 24.0 } else { height / 2.0 };
+        let pen = CreatePen(PS_SOLID, px(1.5).max(1), color);
+        let previous = SelectObject(dc, HGDIOBJ(pen.0));
+        let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        let _ = RoundRect(
+            dc,
+            px(cx - 3.5),
+            px(cy - 8.0),
+            px(cx + 3.5),
+            px(cy + 3.0),
+            px(7.0),
+            px(7.0),
+        );
+        let _ = Arc(
+            dc,
+            px(cx - 7.0),
+            px(cy - 5.0),
+            px(cx + 7.0),
+            px(cy + 7.0),
+            px(cx - 7.0),
+            px(cy),
+            px(cx + 7.0),
+            px(cy),
+        );
+        let _ = MoveToEx(dc, px(cx), px(cy + 7.0), None);
+        let _ = LineTo(dc, px(cx), px(cy + 10.0));
+        let _ = SelectObject(dc, previous);
+        let _ = SelectObject(dc, old_brush);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+        let wave_brush = CreateSolidBrush(accent);
+        let previous = SelectObject(dc, HGDIOBJ(wave_brush.0));
+        let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        let level = if view.phase == "processing" {
+            0.35
         } else if view.phase == "listening" {
             view.level
         } else {
-            0.1
+            0.0
         };
-        let height = 4.0 + activity * 25.0 * variation;
-        let x = 277.0 + i as f64 * 3.0;
-        let _ = RoundRect(
-            hdc,
-            px(x),
-            px(32.0 - height as f64 / 2.0),
-            px(x + 2.0),
-            px(32.0 + height as f64 / 2.0),
-            px(2.0),
-            px(2.0),
-        );
+        for i in 0..13 {
+            let variation = 0.25 + (i as f32 * 1.31 + p.tick.get() as f32 * 0.4).sin().abs() * 0.75;
+            let amplitude = 3.0 + level as f64 * 19.0 * variation as f64;
+            if side {
+                let y = 48.0 + i as f64 * 4.0;
+                let _ = RoundRect(
+                    dc,
+                    px((width - amplitude) / 2.0),
+                    px(y),
+                    px((width + amplitude) / 2.0),
+                    px(y + 2.0),
+                    px(2.0),
+                    px(2.0),
+                );
+            } else {
+                let x = 48.0 + i as f64 * 4.0;
+                let _ = RoundRect(
+                    dc,
+                    px(x),
+                    px((height - amplitude) / 2.0),
+                    px(x + 2.0),
+                    px((height + amplitude) / 2.0),
+                    px(2.0),
+                    px(2.0),
+                );
+            }
+        }
+        let _ = SelectObject(dc, previous);
+        let _ = SelectObject(dc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(wave_brush.0));
+        if !side {
+            let label = match view.phase.as_str() {
+                "listening" if view.message == "Starting microphone" => "Starting".into(),
+                "listening" => format!(
+                    "{}:{:02}",
+                    view.seconds as u32 / 60,
+                    view.seconds as u32 % 60
+                ),
+                "processing" => "Working".into(),
+                "success" => "Done".into(),
+                "error" => "Open app".into(),
+                _ => "Review".into(),
+            };
+            text(
+                dc,
+                &label,
+                RECT {
+                    left: px(113.0),
+                    top: 0,
+                    right: px(width - 35.0),
+                    bottom: client.bottom,
+                },
+                p.small.get(),
+                color,
+            );
+        }
+        let (x, y) = if side {
+            (width / 2.0, height - 24.0)
+        } else {
+            (width - 21.0, height / 2.0)
+        };
+        let pen = CreatePen(PS_SOLID, px(1.2).max(1), color);
+        let old = SelectObject(dc, HGDIOBJ(pen.0));
+        let _ = MoveToEx(dc, px(x - 3.0), px(y - 3.0), None);
+        let _ = LineTo(dc, px(x + 3.0), px(y + 3.0));
+        let _ = MoveToEx(dc, px(x + 3.0), px(y - 3.0), None);
+        let _ = LineTo(dc, px(x - 3.0), px(y + 3.0));
+        let _ = SelectObject(dc, old);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
     }
-    let _ = SelectObject(hdc, previous);
-    let _ = SelectObject(hdc, previous_pen);
-    let _ = DeleteObject(HGDIOBJ(wave_brush.0));
-    let pen = CreatePen(PS_SOLID, px(1.2).max(1), muted);
-    let old = SelectObject(hdc, HGDIOBJ(pen.0));
-    let _ = MoveToEx(hdc, px(332.0), px(27.0), None);
-    let _ = LineTo(hdc, px(340.0), px(35.0));
-    let _ = MoveToEx(hdc, px(340.0), px(27.0), None);
-    let _ = LineTo(hdc, px(332.0), px(35.0));
-    let _ = SelectObject(hdc, old);
-    let _ = DeleteObject(HGDIOBJ(pen.0));
+    let _ = BitBlt(
+        hdc,
+        0,
+        0,
+        client.right,
+        client.bottom,
+        Some(dc),
+        0,
+        0,
+        SRCCOPY,
+    );
+    let _ = SelectObject(dc, old_bitmap);
+    let _ = DeleteObject(HGDIOBJ(bitmap.0));
+    let _ = DeleteDC(dc);
     let _ = EndPaint(hwnd, &ps);
 }
 unsafe extern "system" fn procedure(
@@ -386,42 +556,66 @@ unsafe extern "system" fn procedure(
         }
         WM_DPICHANGED => {
             p.dpi.set(0);
-            position(hwnd, &p);
+            position(hwnd, &p, false);
             LRESULT(0)
         }
         UPDATE => {
             let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
-            if view.phase == "idle" {
-                let _ = ShowWindow(hwnd, SW_HIDE);
-                let _ = KillTimer(Some(hwnd), 1);
-                let _ = KillTimer(Some(hwnd), 2);
-            } else {
-                if !IsWindowVisible(hwnd).as_bool() {
-                    position(hwnd, &p);
-                    if p.animated {
-                        p.alpha.set(90);
-                        let _ =
-                            SetLayeredWindowAttributes(hwnd, COLORREF(0), p.alpha.get(), LWA_ALPHA);
-                        SetTimer(Some(hwnd), 2, 16, None);
-                    }
-                }
-                if view.phase == "processing" && p.animated {
-                    SetTimer(Some(hwnd), 1, 100, None);
-                } else {
-                    let _ = KillTimer(Some(hwnd), 1);
-                }
-                let title: Vec<u16> = view.message.encode_utf16().chain(Some(0)).collect();
-                let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(title.as_ptr()));
-                let _ = InvalidateRect(Some(hwnd), None, false);
+            let active = view.phase != "idle" && !view.phase.is_empty();
+            let dock = dock_id(&view.dock);
+            if p.layout.get() != (active, dock) {
+                // Snap between docks/monitors; only the small activation lift animates.
+                let same_dock = p.layout.get().1 == dock;
+                let same_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+                    == MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
+                position(hwnd, &p, same_dock && same_monitor);
             }
+            if view.phase == "processing" && p.animated {
+                SetTimer(Some(hwnd), 1, 100, None);
+            } else {
+                let _ = KillTimer(Some(hwnd), 1);
+            }
+            let title: Vec<u16> = format!(
+                "Hushline · {}",
+                if active {
+                    view.message.as_str()
+                } else {
+                    "Ready — click to dictate; right-click for settings"
+                }
+            )
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+            let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(title.as_ptr()));
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_TIMER => {
             if wparam.0 == 2 {
-                p.alpha.set(p.alpha.get().saturating_add(25).min(245));
-                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), p.alpha.get(), LWA_ALPHA);
-                if p.alpha.get() == 245 {
-                    let _ = KillTimer(Some(hwnd), 2);
+                if let Some(started) = p.transition.get() {
+                    let t = (started.elapsed().as_secs_f64() / 0.16).min(1.0);
+                    let eased = 1.0 - (1.0 - t).powi(3);
+                    let mix = |a: i32, b: i32| (a as f64 + (b - a) as f64 * eased).round() as i32;
+                    let a = p.from.get();
+                    let b = p.to.get();
+                    p.alpha
+                        .set(mix(p.fade_from.get() as i32, p.fade_to.get() as i32) as u8);
+                    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), p.alpha.get(), LWA_ALPHA);
+                    geometry(
+                        hwnd,
+                        &p,
+                        RECT {
+                            left: mix(a.left, b.left),
+                            top: mix(a.top, b.top),
+                            right: mix(a.right, b.right),
+                            bottom: mix(a.bottom, b.bottom),
+                        },
+                    );
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    if t >= 1.0 {
+                        p.transition.set(None);
+                        let _ = KillTimer(Some(hwnd), 2);
+                    }
                 }
             } else {
                 p.tick.set(p.tick.get().wrapping_add(1));
@@ -429,12 +623,36 @@ unsafe extern "system" fn procedure(
             }
             LRESULT(0)
         }
+        WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+            position(hwnd, &p, false);
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
+            let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
+            let mut client = RECT::default();
+            let _ = GetClientRect(hwnd, &mut client);
             let x = lparam.0 as u16 as i32;
+            let y = (lparam.0 >> 16) as u16 as i32;
+            let side = matches!(dock_id(&view.dock), 1 | 2);
             let scale = p.dpi.get() as f64 / 96.0;
-            if x >= (322.0 * scale) as i32 {
-                let _ = p.tx.send(Action::Cancel);
-            }
+            let cancel = view.phase != "idle"
+                && if side {
+                    y >= client.bottom - (42.0 * scale) as i32
+                } else {
+                    x >= client.right - (38.0 * scale) as i32
+                };
+            let action = if cancel {
+                Action::Cancel
+            } else if view.phase == "error" || view.phase == "preview" {
+                Action::Open
+            } else {
+                Action::HandsFree
+            };
+            let _ = p.tx.send(action);
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            let _ = p.tx.send(Action::Open);
             LRESULT(0)
         }
         WM_CLOSE => {
@@ -488,15 +706,48 @@ mod tests {
         let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
         assert_ne!(ex & WS_EX_NOACTIVATE.0, 0);
         assert_ne!(ex & WS_EX_TOOLWINDOW.0, 0);
+        std::thread::sleep(Duration::from_millis(250));
+        let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64 / 96.0;
+        let mut bounds = RECT::default();
+        unsafe {
+            GetWindowRect(hwnd, &mut bounds).unwrap();
+        }
+        assert_eq!(bounds.right - bounds.left, (216.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (40.0 * scale) as i32);
+        let mut alpha = 0;
+        unsafe {
+            GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), None).unwrap();
+        }
+        assert_eq!(alpha, 255, "Active bar must be fully opaque");
+        configure(&Settings {
+            dock: "left".into(),
+            ..Settings::default()
+        });
+        std::thread::sleep(Duration::from_millis(250));
+        unsafe {
+            GetWindowRect(hwnd, &mut bounds).unwrap();
+        }
+        assert_eq!(bounds.right - bounds.left, (40.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (156.0 * scale) as i32);
         update(&View {
             phase: "idle".into(),
             ..View::default()
         });
         let wait = std::time::Instant::now();
-        while unsafe { IsWindowVisible(hwnd) }.as_bool() && wait.elapsed() < Duration::from_secs(2)
-        {
+        while wait.elapsed() < Duration::from_millis(250) {
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(unsafe { IsWindowVisible(hwnd) }.as_bool());
+        unsafe {
+            GetWindowRect(hwnd, &mut bounds).unwrap();
+        }
+        assert_eq!(bounds.right - bounds.left, (24.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (64.0 * scale) as i32);
+        configure(&Settings {
+            dock: "hidden".into(),
+            ..Settings::default()
+        });
+        std::thread::sleep(Duration::from_millis(200));
         assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
     }
 }

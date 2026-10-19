@@ -5,6 +5,7 @@ use crate::{
     groq::Groq,
     model::*,
     native::{self, Target},
+    offline::Offline,
     shortcuts::Action,
     store::Store,
     text,
@@ -25,6 +26,8 @@ pub struct AppState {
     tx: UnboundedSender<Message>,
     groq: Groq,
     cancel: Mutex<CancellationToken>,
+    offline: Offline,
+    offline_cancel: Mutex<CancellationToken>,
 }
 enum Message {
     Action(Action),
@@ -48,6 +51,7 @@ struct Session {
     test: bool,
     cancelled: bool,
     ready: bool,
+    stopping: bool,
 }
 struct Completed {
     text: String,
@@ -130,6 +134,7 @@ fn begin(
     });
     let (events, rx) = mpsc::channel();
     let capture = audio::start(settings.clone(), events);
+    capture.stop_on_silence(hands_free);
     let tx = state.tx.clone();
     std::thread::spawn(move || {
         while let Ok(event) = rx.recv() {
@@ -157,6 +162,7 @@ fn begin(
         test,
         cancelled: false,
         ready: false,
+        stopping: false,
     }
 }
 
@@ -167,7 +173,11 @@ async fn process(
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
     let started = Instant::now();
-    let key = native::read_key()?;
+    let key = if session.settings.provider == "groq" {
+        Some(native::read_key()?)
+    } else {
+        None
+    };
     let dictionary: Vec<Entry> = state.store.get("dictionary")?;
     let snippets: Vec<Snippet> = state.store.get("snippets")?;
     let styles: Vec<Style> = state.store.get("styles")?;
@@ -182,10 +192,17 @@ async fn process(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let speech = state
-        .groq
-        .transcribe(&key, recording.wav, &session.settings, &hints, &cancel)
-        .await?;
+    let speech = if let Some(key) = key.as_ref() {
+        state
+            .groq
+            .transcribe(key, recording.wav, &session.settings, &hints, &cancel)
+            .await?
+    } else {
+        state
+            .offline
+            .transcribe(recording.wav, &session.settings, &hints, &cancel)
+            .await?
+    };
     let local_mode = text::local_mode(
         &session.settings.mode,
         &session.settings.language,
@@ -193,7 +210,7 @@ async fn process(
     );
     let spoken = speech.text;
     if spoken.trim().is_empty() {
-        return Err("Groq returned no speech. Nothing was inserted.".into());
+        return Err("No speech was returned. Nothing was inserted.".into());
     }
     let target = session.target.unwrap_or_else(|| {
         Err("The original field could not be inspected in time. Transcript preserved.".into())
@@ -212,16 +229,15 @@ async fn process(
         if t.selected.trim().is_empty() {
             return Err("Select text in the target application before using Command Mode. This app may not expose its selection.".into());
         }
-        output = state
-            .groq
-            .rewrite(
-                &key,
-                &session.settings.command_model,
-                &t.selected,
-                &spoken,
-                &cancel,
-            )
-            .await?;
+        output = rewrite(
+            &state,
+            &session.settings,
+            &t.selected,
+            &spoken,
+            true,
+            &cancel,
+        )
+        .await?;
         original = Some(t.selected.clone());
         preview = true;
     } else if let Some((expanded, confirm)) = text::expand(&output, &snippets) {
@@ -244,16 +260,15 @@ async fn process(
                 || style.is_some_and(|s| s.enhanced))
         {
             let instruction=style.map(|s|s.instruction.as_str()).unwrap_or("Remove disfluencies, apply natural punctuation and readable paragraph structure. Preserve the speaker's wording, facts and technical identifiers.");
-            match state
-                .groq
-                .rewrite(
-                    &key,
-                    &session.settings.cleanup_model,
-                    &output,
-                    instruction,
-                    &cancel,
-                )
-                .await
+            match rewrite(
+                &state,
+                &session.settings,
+                &output,
+                instruction,
+                false,
+                &cancel,
+            )
+            .await
             {
                 Ok(value) => {
                     output = value;
@@ -266,6 +281,7 @@ async fn process(
                 }
             }
         }
+        output = text::format(&output, &session.settings.formatting, &local_mode);
     }
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
@@ -280,6 +296,38 @@ async fn process(
         settings: session.settings,
         warning,
     })
+}
+
+async fn rewrite(
+    state: &AppState,
+    settings: &Settings,
+    input: &str,
+    instruction: &str,
+    command: bool,
+    cancel: &CancellationToken,
+) -> Result<String, String> {
+    if settings.provider == "offline" {
+        state
+            .offline
+            .rewrite(&settings.local_text_model, input, instruction, cancel)
+            .await
+    } else {
+        let key = native::read_key()?;
+        state
+            .groq
+            .rewrite(
+                &key,
+                if command {
+                    &settings.command_model
+                } else {
+                    &settings.cleanup_model
+                },
+                input,
+                instruction,
+                cancel,
+            )
+            .await
+    }
 }
 
 fn finish_completed(
@@ -432,7 +480,7 @@ async fn actor(
                 });
             }
             Message::Action(Action::Release) => {
-                if let Some(s) = session.as_ref() {
+                if let Some(s) = session.as_mut() {
                     if !s.hands_free {
                         last_tap = Some(Instant::now());
                         if s.settings.double_tap {
@@ -443,17 +491,24 @@ async fn actor(
                                 let _ = tx.send(Message::ReleaseAfter(id));
                             });
                         } else {
+                            s.stopping = true;
                             s.capture.stop();
                         }
                     }
                 }
             }
             Message::ReleaseAfter(id) => {
-                if let Some(s) = session.as_ref().filter(|s| s.id == id && !s.hands_free) {
+                if let Some(s) = session.as_mut().filter(|s| s.id == id && !s.hands_free) {
+                    s.stopping = true;
                     s.capture.stop();
                 }
             }
             Message::Action(action @ (Action::Push | Action::HandsFree | Action::Command)) => {
+                if session.as_ref().is_some_and(|s| s.stopping) {
+                    if let Some(old) = session.take() {
+                        old.capture.cancel();
+                    }
+                }
                 if let Some(s) = session.as_mut() {
                     match action {
                         Action::Push
@@ -462,6 +517,7 @@ async fn actor(
                                     .is_some_and(|t| t.elapsed() < Duration::from_millis(350)) =>
                         {
                             s.hands_free = true;
+                            s.capture.stop_on_silence(true);
                             publish(&app, &state, |v| {
                                 v.message = if s.ready {
                                     "Listening · hands-free"
@@ -473,6 +529,7 @@ async fn actor(
                         }
                         Action::HandsFree if !s.hands_free => {
                             s.hands_free = true;
+                            s.capture.stop_on_silence(true);
                             publish(&app, &state, |v| {
                                 v.message = if s.ready {
                                     "Listening · hands-free"
@@ -482,7 +539,10 @@ async fn actor(
                                 .into()
                             });
                         }
-                        Action::HandsFree => s.capture.stop(),
+                        Action::HandsFree => {
+                            s.stopping = true;
+                            s.capture.stop();
+                        }
                         Action::Command => {
                             s.command = true;
                             let epoch = native::input_epoch();
@@ -522,10 +582,15 @@ async fn actor(
                     schedule_hide(state.tx.clone(), generation, 7000);
                     continue;
                 }
-                if native::read_key().is_err() {
+                let availability = if settings.provider == "offline" {
+                    state.offline.ready(&settings.offline_model)
+                } else {
+                    native::read_key().map(|_| ())
+                };
+                if let Err(e) = availability {
                     publish(&app, &state, |v| {
                         v.phase = "error".into();
-                        v.message = "Add your Groq API key in Settings.".into();
+                        v.message = e;
                         v.generation = generation;
                     });
                     schedule_hide(state.tx.clone(), generation, 7000);
@@ -620,7 +685,12 @@ async fn actor(
                     Ok(recording) => {
                         publish(&app, &state, |v| {
                             v.phase = "processing".into();
-                            v.message = "Transcribing with Groq".into();
+                            v.message = if s.settings.provider == "offline" {
+                                "Transcribing on this computer"
+                            } else {
+                                "Transcribing with Groq"
+                            }
+                            .into();
                             v.level = 0.0;
                         });
                         let st = state.clone();
@@ -751,6 +821,7 @@ fn snapshot(state: State<Arc<AppState>>, app: tauri::AppHandle) -> Result<Snapsh
     let mut view = state.view.lock().map_err(|_| "State unavailable")?.clone();
     view.has_key = native::read_key().is_ok();
     Ok(Snapshot {
+        offline: state.offline.status(),
         settings: state
             .settings
             .read()
@@ -770,6 +841,7 @@ fn save_settings(state: State<Arc<AppState>>, settings: Settings) -> Result<(), 
     settings.validate()?;
     state.store.set("settings", &settings)?;
     native::update_shortcuts(&settings.shortcuts);
+    native::configure_overlay(&settings);
     *state.settings.write().map_err(|_| "Settings unavailable")? = settings;
     Ok(())
 }
@@ -885,11 +957,49 @@ fn import_configuration(state: State<Arc<AppState>>, content: String) -> Result<
     if content.len() > 8_000_000 {
         return Err("Backup is too large.".into());
     }
-    let backup: Backup = serde_json::from_str(&content).map_err(|_| "Invalid backup file.")?;
+    let mut backup: Backup = serde_json::from_str(&content).map_err(|_| "Invalid backup file.")?;
+    backup.settings.migrate();
     state.store.restore(&backup)?;
     native::update_shortcuts(&backup.settings.shortcuts);
+    native::configure_overlay(&backup.settings);
     *state.settings.write().map_err(|_| "Settings unavailable")? = backup.settings;
     Ok(())
+}
+#[tauri::command]
+fn offline_status(state: State<Arc<AppState>>) -> crate::offline::Status {
+    state.offline.status()
+}
+#[tauri::command]
+async fn install_offline(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+    model: String,
+) -> Result<crate::offline::Status, String> {
+    let token = CancellationToken::new();
+    {
+        let mut current = state
+            .offline_cancel
+            .lock()
+            .map_err(|_| "Download state unavailable")?;
+        current.cancel();
+        *current = token.clone();
+    }
+    state
+        .offline
+        .install(&model, &token, |progress| {
+            let _ = app.emit_to("main", "offline-download", progress);
+        })
+        .await
+}
+#[tauri::command]
+fn cancel_offline_download(state: State<Arc<AppState>>) {
+    if let Ok(token) = state.offline_cancel.lock() {
+        token.cancel();
+    }
+}
+#[tauri::command]
+fn set_shortcut_capture(enabled: bool) {
+    native::shortcut_capture(enabled);
 }
 #[tauri::command]
 fn set_startup(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
@@ -929,14 +1039,23 @@ pub fn run() {
             action,
             export_configuration,
             import_configuration,
-            set_startup
+            set_startup,
+            offline_status,
+            install_offline,
+            cancel_offline_download,
+            set_shortcut_capture
         ])
         .setup(|app| {
             let path = app.path().app_data_dir()?;
             std::fs::create_dir_all(&path)?;
             let store =
                 Store::open(&path.join("hushline.sqlite")).map_err(std::io::Error::other)?;
-            let settings: Settings = store.get("settings").map_err(std::io::Error::other)?;
+            let mut settings: Settings = store.get("settings").map_err(std::io::Error::other)?;
+            if settings.migrate() {
+                store
+                    .set("settings", &settings)
+                    .map_err(std::io::Error::other)?;
+            }
             settings.validate().map_err(std::io::Error::other)?;
             let (tx, rx) = unbounded_channel();
             let state = Arc::new(AppState {
@@ -950,6 +1069,9 @@ pub fn run() {
                 tx: tx.clone(),
                 groq: Groq::new().map_err(std::io::Error::other)?,
                 cancel: Mutex::new(CancellationToken::new()),
+                offline: Offline::new(app.path().app_local_data_dir()?.join("offline"))
+                    .map_err(std::io::Error::other)?,
+                offline_cancel: Mutex::new(CancellationToken::new()),
             });
             let (hook_tx, hook_rx) = mpsc::channel();
             if let Err(e) = native::start_hooks(&settings.shortcuts, hook_tx.clone()) {
@@ -986,6 +1108,8 @@ pub fn run() {
             if let Err(e) = native::start_overlay(hook_tx) {
                 state.view.lock().unwrap().warning = e;
             }
+            native::configure_overlay(&settings);
+            native::update_overlay(&state.view.lock().unwrap());
             let open =
                 tauri::menu::MenuItem::with_id(app, "open", "Open Hushline", true, None::<&str>)?;
             let cancel = tauri::menu::MenuItem::with_id(
@@ -1025,6 +1149,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    native::shortcut_capture(false);
                     api.prevent_close();
                     let _ = window.destroy();
                 }

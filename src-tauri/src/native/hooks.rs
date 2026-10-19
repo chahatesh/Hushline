@@ -14,6 +14,31 @@ use windows::Win32::{
 };
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 static DICTATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CAPTURE_UNTIL: AtomicU64 = AtomicU64::new(0);
+fn monotonic_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+pub fn shortcut_capture(enabled: bool) {
+    CAPTURE_UNTIL.store(
+        if enabled { monotonic_ms() + 15_000 } else { 0 },
+        Ordering::SeqCst,
+    );
+    if enabled {
+        if let Some(lock) = STATE.get() {
+            if let Ok(mut s) = lock.lock() {
+                if s.held.take().is_some() {
+                    if let Some(tx) = SENDER.get() {
+                        let _ = tx.send(Action::Release);
+                    }
+                }
+            }
+        }
+    }
+}
 pub fn set_active(value: bool) {
     DICTATION_ACTIVE.store(value, Ordering::SeqCst);
 }
@@ -22,8 +47,8 @@ static STATE: OnceLock<Mutex<Keys>> = OnceLock::new();
 struct Keys {
     down: [bool; 256],
     bindings: Vec<(Chord, Action)>,
-    active: Option<Action>,
-    push_active: bool,
+    held: Option<Chord>,
+    consumed: [bool; 256],
 }
 pub fn input_epoch() -> u64 {
     EPOCH.load(Ordering::SeqCst)
@@ -36,15 +61,18 @@ pub fn update_shortcuts(s: &Shortcuts) {
     if let Some(state) = STATE.get() {
         if let Ok(mut state) = state.lock() {
             state.bindings = bindings;
-            state.active = None;
-            state.push_active = false;
+            if state.held.take().is_some() {
+                if let Some(tx) = SENDER.get() {
+                    let _ = tx.send(Action::Release);
+                }
+            }
         }
     } else {
         let _ = STATE.set(Mutex::new(Keys {
             down: [false; 256],
             bindings,
-            active: None,
-            push_active: false,
+            held: None,
+            consumed: [false; 256],
         }));
     }
 }
@@ -106,6 +134,91 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
 fn modifier(key: u16) -> bool {
     matches!(key,0x10..=0x12|0x5b..=0x5c|0xa0..=0xa5)
 }
+impl Keys {
+    fn modifiers(&self) -> u8 {
+        let d = &self.down;
+        (if d[0x11] || d[0xa2] || d[0xa3] {
+            CTRL
+        } else {
+            0
+        }) | (if d[0x5b] || d[0x5c] { WIN } else { 0 })
+            | (if d[0x12] || d[0xa4] || d[0xa5] {
+                ALT
+            } else {
+                0
+            })
+            | (if d[0x10] || d[0xa0] || d[0xa1] {
+                SHIFT
+            } else {
+                0
+            })
+    }
+    fn satisfied(&self, c: &Chord) -> bool {
+        self.modifiers() == c.modifiers
+            && match c.key {
+                Some(k) => self.down[k as usize],
+                None => !self
+                    .down
+                    .iter()
+                    .enumerate()
+                    .any(|(k, d)| *d && !modifier(k as u16)),
+            }
+    }
+    fn route(&mut self, key: u16, down: bool, recording: bool) -> (bool, Vec<Action>) {
+        if key > 255 {
+            return (false, vec![]);
+        }
+        let index = key as usize;
+        let repeated = self.down[index] == down;
+        self.down[index] = down;
+        let was_consumed = self.consumed[index];
+        if !down {
+            self.consumed[index] = false;
+        }
+        if repeated {
+            return (was_consumed, vec![]);
+        }
+        let mut actions = Vec::with_capacity(1);
+        // Actions start only on a fresh key DOWN. Releasing Space/Alt/V cannot
+        // fall back to Ctrl+Win and accidentally start/stop another recording.
+        let matched = if down {
+            self.bindings
+                .iter()
+                .find(|(c, a)| {
+                    if *a == Action::Cancel && c.key == Some(0x1b) {
+                        return recording && key == 0x1b;
+                    }
+                    self.satisfied(c) && (c.key == Some(key) || modifier(key))
+                })
+                .cloned()
+        } else {
+            None
+        };
+        if let Some((chord, action)) = matched.as_ref() {
+            if self.held.as_ref() != Some(chord) {
+                actions.push(*action);
+                self.held = if matches!(action, Action::Push | Action::Command) {
+                    Some(chord.clone())
+                } else {
+                    None
+                };
+            }
+            if !modifier(key) || matches!(key, 0x5b | 0x5c) {
+                self.consumed[index] = true;
+            }
+        }
+        if self.held.as_ref().is_some_and(|c| !self.satisfied(c)) {
+            self.held = None;
+            if !actions
+                .iter()
+                .any(|a| matches!(a, Action::HandsFree | Action::Command | Action::Cancel))
+            {
+                actions.push(Action::Release);
+            }
+        }
+        (was_consumed || self.consumed[index], actions)
+    }
+}
 fn handle(key: u16, down: bool) -> bool {
     let Some(lock) = STATE.get() else {
         return false;
@@ -113,67 +226,26 @@ fn handle(key: u16, down: bool) -> bool {
     let Ok(mut s) = lock.lock() else {
         return false;
     };
-    if key > 255 {
-        return false;
-    }
-    let repeat = s.down[key as usize] == down;
-    s.down[key as usize] = down;
-    let d = &s.down;
-    let mods = (if d[0x11] || d[0xa2] || d[0xa3] {
-        CTRL
-    } else {
-        0
-    }) | (if d[0x5b] || d[0x5c] { WIN } else { 0 })
-        | (if d[0x12] || d[0xa4] || d[0xa5] {
-            ALT
-        } else {
-            0
-        })
-        | (if d[0x10] || d[0xa0] || d[0xa1] {
-            SHIFT
-        } else {
-            0
-        });
-    let matched = s
-        .bindings
-        .iter()
-        .find(|(chord, action)| {
-            if *action == Action::Cancel && chord.key == Some(0x1b) {
-                return DICTATION_ACTIVE.load(Ordering::SeqCst) && s.down[0x1b];
-            }
-            chord.modifiers == mods
-                && match chord.key {
-                    Some(k) => s.down[k as usize],
-                    None => !s
-                        .down
-                        .iter()
-                        .enumerate()
-                        .any(|(k, d)| *d && !modifier(k as u16)),
-                }
-        })
-        .map(|(_, a)| *a);
-    if !repeat && matched != s.active {
-        if let Some(action) = matched {
-            if let Some(tx) = SENDER.get() {
-                let _ = tx.send(action);
-            }
-            if action == Action::Push {
-                s.push_active = true;
-            }
-        } else if s.push_active {
-            if let Some(tx) = SENDER.get() {
-                let _ = tx.send(Action::Release);
-            }
-            s.push_active = false;
+    if monotonic_ms() < CAPTURE_UNTIL.load(Ordering::SeqCst) && key <= 255 {
+        s.down[key as usize] = down;
+        s.held = None;
+        let consumed = s.consumed[key as usize];
+        if !down {
+            s.consumed[key as usize] = false;
         }
-        s.active = matched;
+        return consumed;
     }
-    let consumed = matched.is_some() && !modifier(key);
-    if down && !repeat && !modifier(key) && !consumed {
+    let previous = (key <= 255).then(|| s.down[key as usize]);
+    let (consumed, actions) = s.route(key, down, DICTATION_ACTIVE.load(Ordering::SeqCst));
+    for action in actions {
+        if let Some(tx) = SENDER.get() {
+            let _ = tx.send(action);
+        }
+    }
+    if down && previous == Some(false) && !modifier(key) && !consumed {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
-    // Suppress the Win key while a Hushline chord is active to avoid opening Start.
-    consumed || ((key == 0x5b || key == 0x5c) && (mods & CTRL != 0 || s.push_active))
+    consumed
 }
 unsafe extern "system" fn keyboard(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code >= 0 {
@@ -226,28 +298,88 @@ unsafe extern "system" fn focus_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn keys() -> Keys {
+        Keys {
+            down: [false; 256],
+            consumed: [false; 256],
+            held: None,
+            bindings: shortcuts::bindings(&Shortcuts::default())
+                .into_iter()
+                .map(|(c, a)| (shortcuts::parse(c).unwrap(), a))
+                .collect(),
+        }
+    }
     #[test]
-    fn keyboard_router_cancels_with_modifiers_and_leaves_idle_escape_alone() {
-        let (tx, rx) = mpsc::channel();
-        let _ = SENDER.set(tx);
-        update_shortcuts(&Shortcuts::default());
-        set_active(false);
-        assert!(!handle(0x1b, true));
-        handle(0x1b, false);
-        assert!(rx.try_recv().is_err());
-        handle(0xa2, true);
-        assert!(handle(0x5b, true));
-        assert_eq!(rx.recv().unwrap(), Action::Push);
-        set_active(true);
-        assert!(handle(0x20, true));
-        assert_eq!(rx.recv().unwrap(), Action::HandsFree);
-        handle(0x20, false);
-        while rx.try_recv().is_ok() {}
-        assert!(handle(0x1b, true));
-        assert_eq!(rx.recv().unwrap(), Action::Cancel);
-        handle(0x1b, false);
-        handle(0x5b, false);
-        handle(0xa2, false);
-        set_active(false);
+    fn release_of_specific_chord_never_retriggers_push() {
+        for (key, expected) in [
+            (0x20, Action::HandsFree),
+            (0xa4, Action::Command),
+            (0x56, Action::Paste),
+        ] {
+            let mut s = keys();
+            s.route(0xa2, true, false);
+            assert_eq!(s.route(0x5b, true, false), (true, vec![Action::Push]));
+            assert_eq!(s.route(key, true, true).1, vec![expected]);
+            let up = s.route(key, false, true);
+            assert!(!up.1.contains(&Action::Push));
+            if expected == Action::Command {
+                assert_eq!(up.1, vec![Action::Release]);
+            } else {
+                assert!(up.1.is_empty());
+            }
+            assert!(
+                s.route(0x5b, false, true).0,
+                "Win release must also be swallowed"
+            );
+            s.route(0xa2, false, false);
+        }
+    }
+    #[test]
+    fn hold_releases_once_and_key_repeats_are_ignored() {
+        let mut s = keys();
+        s.route(0x5b, true, false);
+        assert_eq!(s.route(0xa2, true, false).1, vec![Action::Push]);
+        assert!(s.route(0xa2, true, true).1.is_empty());
+        assert_eq!(s.route(0xa2, false, true).1, vec![Action::Release]);
+        assert!(s.route(0x5b, false, false).1.is_empty());
+    }
+    #[test]
+    fn idle_escape_passes_through_and_active_escape_cancels() {
+        let mut s = keys();
+        assert_eq!(s.route(0x1b, true, false), (false, vec![]));
+        s.route(0x1b, false, false);
+        s.route(0xa2, true, false);
+        s.route(0x5b, true, false);
+        assert_eq!(s.route(0x1b, true, true), (true, vec![Action::Cancel]));
+        assert!(s.route(0x1b, false, false).0);
+    }
+    #[test]
+    fn fast_repeated_press_release_is_not_lost() {
+        let mut s = keys();
+        for _ in 0..100 {
+            s.route(0xa2, true, false);
+            assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
+            assert_eq!(s.route(0x5b, false, true).1, vec![Action::Release]);
+            s.route(0xa2, false, false);
+        }
+    }
+    #[test]
+    fn space_and_short_taps_never_open_the_dashboard() {
+        let mut s = keys();
+        for _ in 0..20 {
+            assert!(s.route(0x20, true, false).1.is_empty());
+            assert!(s.route(0x20, true, false).1.is_empty());
+            assert!(s.route(0x20, false, false).1.is_empty());
+            for (key, down) in [
+                (0xa2, true),
+                (0x5b, true),
+                (0x20, true),
+                (0x20, false),
+                (0x5b, false),
+                (0xa2, false),
+            ] {
+                assert!(!s.route(key, down, true).1.contains(&Action::Open));
+            }
+        }
     }
 }

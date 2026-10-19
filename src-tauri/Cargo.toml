@@ -1,6 +1,6 @@
 [package]
 name = "hushline"
-version = "0.1.0"
+version = "0.2.0"
 description = "Private by choice, fast by design. Windows dictation powered by Groq."
 authors = ["Chahatesh"]
 license = "MIT"
@@ -21,7 +21,7 @@ tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "process", "io-util"] }
 tokio-util = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -31,6 +31,9 @@ regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_DataExchange", "Win32_Security_Credentials", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Security"] }
