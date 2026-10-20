@@ -26,6 +26,14 @@ try {
   const before=await native(main,'snapshot');
   report.checks.nativeSnapshot=true;
   report.checks.noSecretInSettings=!('apiKey' in before.settings);
+  assert.equal(before.settings.preferencesVersion,4);
+  try {
+    for(const polishPolicy of ['always','sometimes','never']) {
+      await native(main,'save_settings',{settings:{...before.settings,polishPolicy}});
+      assert.equal((await native(main,'snapshot')).settings.polishPolicy,polishPolicy);
+    }
+    report.checks.nativePolishPolicyPersistence=true;
+  } finally { await native(main,'save_settings',{settings:before.settings}); }
   // A developer may already have real dictation in their profile. Never publish it.
   await main.screenshot({path:'docs/screenshots/windows-home.png',fullPage:true,animations:'disabled',timeout:20000,maskColor:'#e4e9f0',mask:[main.locator('.transcript-row'),main.locator('.recovery'),main.locator('.stat-strip')]});
   await main.getByRole('button',{name:'Dictionary',exact:true}).click();

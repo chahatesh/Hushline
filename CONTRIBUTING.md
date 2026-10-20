@@ -1,4 +1,4 @@
-# Contributing to Hushline
+# Contributing to Hush
 
 Thank you for helping make voice input more useful. Discuss large changes in an issue first. Small bug fixes, accessibility improvements, tests, and documentation are welcome.
 

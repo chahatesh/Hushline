@@ -1,6 +1,8 @@
 # Third-party dependency notices
 
-Original Hushline code is MIT-licensed. Dependencies retain their own licenses. This inventory comes from the Windows-filtered Cargo metadata and npm package metadata; it includes build and test dependencies and is not a replacement for their license files. Compiler/SDK tools are not project dependencies or redistributable project assets.
+Original Hush code is MIT-licensed. Dependencies retain their own licenses. This inventory comes from the Windows-filtered Cargo metadata and npm package metadata; it includes build and test dependencies and is not a replacement for their license files. Compiler/SDK tools are not project dependencies or redistributable project assets.
+
+The Windows NSIS template derives from Tauri `tauri-cli-v2.12.3`, used under its MIT license, Copyright (c) 2017 - Present Tauri Apps Contributors. Attribution, the complete license and exact changes are in `src-tauri/windows/README.md` and `TAURI-LICENSE-MIT`; the license is also included in `THIRD_PARTY_LICENSES.txt`. The Tauri contributors retain ownership of this template.
 
 ## Frontend runtime
 
