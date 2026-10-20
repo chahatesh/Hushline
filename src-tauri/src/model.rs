@@ -21,6 +21,7 @@ pub struct Settings {
     pub formatting: String,
     pub dock: String,
     pub microphone: String,
+    pub prepare_microphone: bool,
     pub speech_model: String,
     pub cleanup_model: String,
     pub command_model: String,
@@ -42,13 +43,14 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            preferences_version: 2,
+            preferences_version: 3,
             provider: "groq".into(),
             offline_model: "tiny".into(),
             local_text_model: String::new(),
             formatting: "auto".into(),
             dock: "bottom".into(),
             microphone: String::new(),
+            prepare_microphone: true,
             speech_model: "whisper-large-v3-turbo".into(),
             cleanup_model: "openai/gpt-oss-20b".into(),
             command_model: "openai/gpt-oss-120b".into(),
@@ -58,8 +60,8 @@ impl Default for Settings {
             history_enabled: true,
             context_enabled: false,
             selection_permission: false,
-            max_seconds: 120,
-            silence_seconds: 8,
+            max_seconds: 600,
+            silence_seconds: 0,
             vad_threshold: 0.012,
             double_tap: false,
             theme: "system".into(),
@@ -71,12 +73,20 @@ impl Default for Settings {
 
 impl Settings {
     pub fn migrate(&mut self) -> bool {
-        if self.preferences_version >= 2 {
+        if self.preferences_version >= 3 {
             return false;
         }
         // v0.1 shipped character injection as the default. Prefer one paste on upgrade.
-        self.insertion = "clipboard".into();
-        self.preferences_version = 2;
+        if self.preferences_version < 2 {
+            self.insertion = "clipboard".into();
+        }
+        if self.max_seconds == 120 {
+            self.max_seconds = 600;
+        }
+        if self.silence_seconds == 8 {
+            self.silence_seconds = 0;
+        }
+        self.preferences_version = 3;
         true
     }
     pub fn validate(&self) -> Result<(), String> {
@@ -98,8 +108,8 @@ impl Settings {
         if !(5..=600).contains(&self.max_seconds) {
             return Err("Maximum recording must be 5–600 seconds.".into());
         }
-        if !(2..=60).contains(&self.silence_seconds) {
-            return Err("Silence timeout must be 2–60 seconds.".into());
+        if self.silence_seconds != 0 && !(2..=60).contains(&self.silence_seconds) {
+            return Err("Silence timeout must be off, or 2–60 seconds.".into());
         }
         if !self.vad_threshold.is_finite() || !(0.001..=0.2).contains(&self.vad_threshold) {
             return Err("Voice sensitivity is out of range.".into());
@@ -260,5 +270,24 @@ mod tests {
         settings.insertion = "unicode".into();
         assert!(!settings.migrate());
         assert_eq!(settings.insertion, "unicode");
+    }
+    #[test]
+    fn upgrades_old_recording_defaults_and_preserves_custom_limits() {
+        let mut old: Settings = serde_json::from_str(
+            r#"{"preferencesVersion":2,"maxSeconds":120,"silenceSeconds":8,"insertion":"unicode"}"#,
+        )
+        .unwrap();
+        assert!(old.migrate());
+        assert_eq!(old.max_seconds, 600);
+        assert_eq!(old.silence_seconds, 0);
+        assert_eq!(old.insertion, "unicode");
+        assert!(old.prepare_microphone);
+        let mut custom: Settings = serde_json::from_str(
+            r#"{"preferencesVersion":2,"maxSeconds":300,"silenceSeconds":20}"#,
+        )
+        .unwrap();
+        custom.migrate();
+        assert_eq!(custom.max_seconds, 300);
+        assert_eq!(custom.silence_seconds, 20);
     }
 }

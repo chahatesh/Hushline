@@ -25,6 +25,7 @@ pub struct AppState {
     view: Mutex<View>,
     tx: UnboundedSender<Message>,
     groq: Groq,
+    audio: audio::Engine,
     cancel: Mutex<CancellationToken>,
     offline: Offline,
     offline_cancel: Mutex<CancellationToken>,
@@ -40,6 +41,7 @@ enum Message {
     Applied(u64, Result<String, String>),
     Apply,
     Hide(u64),
+    ClipboardWarning(String),
 }
 struct Session {
     id: u64,
@@ -99,6 +101,13 @@ fn show(app: &tauri::AppHandle, page: Option<&str>) {
         }
     }
 }
+fn clipboard_notice(tx: UnboundedSender<Message>) -> Option<Box<dyn FnOnce(String) + Send>> {
+    Some(Box::new(move |warning| {
+        if !warning.is_empty() {
+            let _ = tx.send(Message::ClipboardWarning(warning));
+        }
+    }))
+}
 fn schedule_hide(tx: UnboundedSender<Message>, id: u64, millis: u64) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(millis)).await;
@@ -133,7 +142,7 @@ fn begin(
         v.warning.clear();
     });
     let (events, rx) = mpsc::channel();
-    let capture = audio::start(settings.clone(), events);
+    let capture = state.audio.start(settings.clone(), events);
     capture.stop_on_silence(hands_free);
     let tx = state.tx.clone();
     std::thread::spawn(move || {
@@ -218,7 +227,13 @@ async fn process(
     let mut output = text::normalize(&spoken, &local_mode, &dictionary);
     let mut preview = false;
     let mut original = None;
-    let mut warning = String::new();
+    let mut warning = if recording.limit_reached {
+        "Recording reached its time limit. Everything recorded up to that point was kept."
+            .to_string()
+    } else {
+        String::new()
+    };
+    let _encoding_ms = recording.encoding_ms;
     if session.command {
         if !session.settings.selection_permission {
             return Err(
@@ -259,7 +274,7 @@ async fn process(
                 || session.settings.mode == Mode::Polished
                 || style.is_some_and(|s| s.enhanced))
         {
-            let instruction=style.map(|s|s.instruction.as_str()).unwrap_or("Remove disfluencies, apply natural punctuation and readable paragraph structure. Preserve the speaker's wording, facts and technical identifiers.");
+            let instruction=style.map(|s|s.instruction.as_str()).unwrap_or("Turn this speech into clear, natural, professional prose. Remove stutters, accidental repeated fragments and empty hesitations. Use blank lines for readable paragraphs and • bullets for clear lists. Do not summarize or omit substantive statements. Preserve meaning, names, facts, dates, times, numbers, URLs and technical identifiers.");
             match rewrite(
                 &state,
                 &session.settings,
@@ -270,14 +285,25 @@ async fn process(
             )
             .await
             {
-                Ok(value) => {
-                    output = value;
-                }
+                Ok(value) => match text::validate_cleanup(&output, &value) {
+                    Ok(()) => output = value,
+                    Err(reason) => {
+                        if !warning.is_empty() {
+                            warning.push(' ');
+                        }
+                        warning.push_str(&reason);
+                    }
+                },
                 Err(e) => {
                     if cancel.is_cancelled() {
                         return Err("Cancelled".into());
                     }
-                    warning = format!("AI cleanup was unavailable; local cleanup was used. {e}");
+                    if !warning.is_empty() {
+                        warning.push(' ');
+                    }
+                    warning.push_str(&format!(
+                        "AI cleanup was unavailable; local cleanup was used. {e}"
+                    ));
                 }
             }
         }
@@ -449,9 +475,12 @@ async fn actor(
                 *state.cancel.lock().unwrap() = token.clone();
                 if !text.is_empty() {
                     tauri::async_runtime::spawn(async move {
+                        let notice = clipboard_notice(st.tx.clone());
                         let result = tauri::async_runtime::spawn_blocking(move || {
                             let target = native::capture_target(false)?;
-                            native::insert(&target, &text, &method, false, &token)
+                            native::insert_with_notice(
+                                &target, &text, &method, false, &token, notice,
+                            )
                         })
                         .await;
                         publish(&a, &st, |v| {
@@ -730,18 +759,21 @@ async fn actor(
                             let token = cancellation.clone();
                             let tx = state.tx.clone();
                             tauri::async_runtime::spawn(async move {
+                                let notice = clipboard_notice(tx.clone());
                                 let result = tauri::async_runtime::spawn_blocking(move || {
-                                    native::insert(&target?, &text, &method, false, &token)
+                                    native::insert_with_notice(
+                                        &target?, &text, &method, false, &token, notice,
+                                    )
                                 })
                                 .await;
                                 let (inserted, warning) = match result {
                                     Ok(Ok(message)) => (
                                         true,
-                                        if done.settings.insertion == "clipboard" {
-                                            message
-                                        } else {
-                                            done.warning.clone()
-                                        },
+                                        [done.warning.as_str(), message.as_str()]
+                                            .into_iter()
+                                            .filter(|v| !v.is_empty())
+                                            .collect::<Vec<_>>()
+                                            .join(" "),
                                     ),
                                     Ok(Err(e)) => (false, e),
                                     _ => (
@@ -759,6 +791,14 @@ async fn actor(
                         }
                     }
                 }
+            }
+            Message::ClipboardWarning(warning) => {
+                publish(&app, &state, |v| {
+                    if !v.warning.is_empty() {
+                        v.warning.push(' ');
+                    }
+                    v.warning.push_str(&warning);
+                });
             }
             Message::Delivered(id, done, inserted, warning) => {
                 if id == generation && !cancellation.is_cancelled() {
@@ -778,8 +818,11 @@ async fn actor(
                         v.original = None;
                     });
                     tauri::async_runtime::spawn(async move {
+                        let notice = clipboard_notice(tx.clone());
                         let result = tauri::async_runtime::spawn_blocking(move || {
-                            native::insert(&p.target, &p.text, &method, true, &token)
+                            native::insert_with_notice(
+                                &p.target, &p.text, &method, true, &token, notice,
+                            )
                         })
                         .await
                         .unwrap_or_else(|_| {
@@ -842,6 +885,7 @@ fn save_settings(state: State<Arc<AppState>>, settings: Settings) -> Result<(), 
     state.store.set("settings", &settings)?;
     native::update_shortcuts(&settings.shortcuts);
     native::configure_overlay(&settings);
+    state.audio.configure(settings.clone());
     *state.settings.write().map_err(|_| "Settings unavailable")? = settings;
     Ok(())
 }
@@ -962,6 +1006,7 @@ fn import_configuration(state: State<Arc<AppState>>, content: String) -> Result<
     state.store.restore(&backup)?;
     native::update_shortcuts(&backup.settings.shortcuts);
     native::configure_overlay(&backup.settings);
+    state.audio.configure(backup.settings.clone());
     *state.settings.write().map_err(|_| "Settings unavailable")? = backup.settings;
     Ok(())
 }
@@ -1068,6 +1113,7 @@ pub fn run() {
                 }),
                 tx: tx.clone(),
                 groq: Groq::new().map_err(std::io::Error::other)?,
+                audio: audio::Engine::new(settings.clone()),
                 cancel: Mutex::new(CancellationToken::new()),
                 offline: Offline::new(app.path().app_local_data_dir()?.join("offline"))
                     .map_err(std::io::Error::other)?,

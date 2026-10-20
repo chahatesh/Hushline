@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: MIT
-//! An event-driven WASAPI stream exists only during capture. Raw audio never touches disk.
+//! A stopped WASAPI client is prepared asynchronously. No idle audio is read.
+//! The worker blocks on commands while idle; Start/Stop/Reset happen on its thread.
 use crate::model::Settings;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::{
     io::Cursor,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+mod wasapi;
 
 #[derive(Debug)]
 pub enum Event {
@@ -21,9 +23,17 @@ pub enum Event {
 pub struct Recording {
     pub wav: Vec<u8>,
     pub duration_ms: u64,
+    pub limit_reached: bool,
+    pub encoding_ms: u64,
+}
+pub struct Engine {
+    tx: mpsc::Sender<Request>,
+    next: AtomicU64,
 }
 pub struct Capture {
-    stop: mpsc::Sender<bool>,
+    tx: mpsc::Sender<Request>,
+    id: u64,
+    cancelled: Arc<AtomicBool>,
     silence: Arc<AtomicBool>,
 }
 impl Capture {
@@ -31,10 +41,11 @@ impl Capture {
         self.silence.store(enabled, Ordering::Relaxed);
     }
     pub fn stop(&self) {
-        let _ = self.stop.send(false);
+        let _ = self.tx.send(Request::Stop(self.id, false));
     }
     pub fn cancel(&self) {
-        let _ = self.stop.send(true);
+        self.cancelled.store(true, Ordering::Release);
+        let _ = self.tx.send(Request::Stop(self.id, true));
     }
 }
 impl Drop for Capture {
@@ -42,174 +53,306 @@ impl Drop for Capture {
         self.cancel();
     }
 }
-struct Buffer {
+struct Start {
+    id: u64,
+    settings: Settings,
+    events: mpsc::Sender<Event>,
+    cancelled: Arc<AtomicBool>,
+    silence: Arc<AtomicBool>,
+}
+enum Request {
+    Configure(Settings),
+    Start(Start),
+    Stop(u64, bool),
+    #[cfg(test)]
+    Barrier(mpsc::Sender<()>),
+}
+struct Active {
+    request: Start,
     samples: Vec<f32>,
+    rate: u32,
+    max: usize,
     rms: f32,
     voice_frames: usize,
     last_voice: usize,
-    error: bool,
+    started: Instant,
+    last_packet: Instant,
+    limit_reached: bool,
 }
-
+impl Active {
+    fn read(&mut self, stream: &mut wasapi::Stream) -> Result<(), String> {
+        let start = self.samples.len();
+        let mut power = 0.0;
+        stream.read(|value| {
+            if self.samples.len() < self.max {
+                self.samples.push(value);
+                power += value * value;
+            }
+        })?;
+        let count = self.samples.len() - start;
+        if count > 0 {
+            self.last_packet = Instant::now();
+            self.rms = (power / count as f32).sqrt();
+            if self.rms >= self.request.settings.vad_threshold {
+                self.voice_frames += count;
+                self.last_voice = self.samples.len();
+            }
+        }
+        Ok(())
+    }
+}
+impl Engine {
+    pub fn new(settings: Settings) -> Self {
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("hushline-audio".into())
+            .spawn(move || worker(rx))
+            .expect("audio worker thread");
+        let engine = Self {
+            tx,
+            next: AtomicU64::new(1),
+        };
+        engine.configure(settings);
+        engine
+    }
+    pub fn configure(&self, settings: Settings) {
+        let _ = self.tx.send(Request::Configure(settings));
+    }
+    pub fn start(&self, settings: Settings, events: mpsc::Sender<Event>) -> Capture {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let silence = Arc::new(AtomicBool::new(false));
+        let request = Start {
+            id,
+            settings,
+            events: events.clone(),
+            cancelled: cancelled.clone(),
+            silence: silence.clone(),
+        };
+        if self.tx.send(Request::Start(request)).is_err() {
+            let _ = events.send(Event::Finished(Err(
+                "Microphone worker is unavailable. Restart Hushline.".into(),
+            )));
+        }
+        Capture {
+            tx: self.tx.clone(),
+            id,
+            cancelled,
+            silence,
+        }
+    }
+}
+#[cfg(test)]
+fn start(settings: Settings, events: mpsc::Sender<Event>) -> Capture {
+    let engine = Engine::new(Settings {
+        prepare_microphone: false,
+        ..settings.clone()
+    });
+    engine.start(settings, events)
+}
 pub fn devices() -> Result<Vec<String>, String> {
     cpal::default_host()
         .input_devices()
-        .map_err(|_| "Could not enumerate microphones.".to_string())?
+        .map_err(|_| "Could not list microphones.".to_string())?
         .map(|d| {
             d.name()
                 .map_err(|_| "A microphone name is unavailable.".to_string())
         })
         .collect()
 }
-pub fn start(settings: Settings, events: mpsc::Sender<Event>) -> Capture {
-    let (stop_tx, stop_rx) = mpsc::channel();
-    let silence = Arc::new(AtomicBool::new(false));
-    let silence_worker = silence.clone();
-    std::thread::spawn(move || {
-        let result = capture(&settings, &events, stop_rx, &silence_worker);
-        let _ = events.send(Event::Finished(result));
-    });
-    Capture {
-        stop: stop_tx,
-        silence,
+fn begin(request: &Start, stream: &mut Option<wasapi::Stream>) -> Result<Active, String> {
+    if request.cancelled.load(Ordering::Acquire) {
+        return Err("Cancelled".into());
     }
-}
-fn pending_stop(stop: &mpsc::Receiver<bool>) -> Result<(), String> {
-    match stop.try_recv() {
-        Err(mpsc::TryRecvError::Empty) => Ok(()),
-        _ => Err("Cancelled".into()),
+    if stream
+        .as_ref()
+        .is_some_and(|s| !s.matches_selection(&request.settings.microphone))
+    {
+        *stream = None;
     }
-}
-fn capture(
-    s: &Settings,
-    events: &mpsc::Sender<Event>,
-    stop: mpsc::Receiver<bool>,
-    silence: &AtomicBool,
-) -> Result<Recording, String> {
-    pending_stop(&stop)?;
-    #[cfg(test)]
-    let setup_clock = std::time::Instant::now();
-    let host = cpal::default_host();
-    let device = if s.microphone.is_empty() {
-        host.default_input_device()
-    } else {
-        host.input_devices()
-            .map_err(|_| "Cannot list microphones.")?
-            .find(|d| d.name().is_ok_and(|n| n == s.microphone))
+    if stream.is_none() {
+        *stream = Some(wasapi::Stream::open(&request.settings.microphone)?);
     }
-    .ok_or("Selected microphone is unavailable. Reconnect it or choose another in Settings.")?;
-    #[cfg(test)]
-    eprintln!(
-        "Microphone setup: device selected at {} ms",
-        setup_clock.elapsed().as_millis()
-    );
-    let config = device
-        .default_input_config()
-        .map_err(|_| "Microphone is unavailable. Check Windows microphone privacy settings.")?;
-    pending_stop(&stop)?;
-    #[cfg(test)]
-    eprintln!(
-        "Microphone setup: format ready at {} ms",
-        setup_clock.elapsed().as_millis()
-    );
-    let rate = config.sample_rate().0;
-    let channels = config.channels() as usize;
+    let device = stream.as_mut().unwrap();
+    let rate = device.rate;
     let max = (rate as usize)
-        .checked_mul(s.max_seconds as usize)
+        .checked_mul(request.settings.max_seconds as usize)
         .ok_or("Recording limit is too large.")?;
-    let data = Arc::new(Mutex::new(Buffer {
-        samples: Vec::with_capacity(max),
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(max).map_err(|_| {
+        "There isn't enough memory for this recording limit. Choose a shorter limit in Settings."
+    })?;
+    if request.cancelled.load(Ordering::Acquire) {
+        return Err("Cancelled".into());
+    }
+    device.start()?;
+    Ok(Active {
+        request: Start {
+            id: request.id,
+            settings: request.settings.clone(),
+            events: request.events.clone(),
+            cancelled: request.cancelled.clone(),
+            silence: request.silence.clone(),
+        },
+        samples,
+        rate,
+        max,
         rms: 0.0,
         voice_frames: 0,
         last_voice: 0,
-        error: false,
-    }));
-    let stream =
-        match config.sample_format() {
-            cpal::SampleFormat::F32 => stream::<f32>(
-                &device,
-                &config.clone().into(),
-                data.clone(),
-                channels,
-                max,
-                s.vad_threshold,
-            ),
-            cpal::SampleFormat::I16 => stream::<i16>(
-                &device,
-                &config.clone().into(),
-                data.clone(),
-                channels,
-                max,
-                s.vad_threshold,
-            ),
-            cpal::SampleFormat::U16 => stream::<u16>(
-                &device,
-                &config.clone().into(),
-                data.clone(),
-                channels,
-                max,
-                s.vad_threshold,
-            ),
-            _ => return Err(
-                "Microphone sample format is unsupported. Select a standard Windows input device."
-                    .into(),
-            ),
-        }
-        .map_err(|_| {
-            "Could not start microphone capture. Check device access and Windows privacy settings."
-        })?;
-    pending_stop(&stop)?;
-    #[cfg(test)]
-    eprintln!(
-        "Microphone setup: stream built at {} ms",
-        setup_clock.elapsed().as_millis()
-    );
-    stream
-        .play()
-        .map_err(|_| "Could not activate the microphone.")?;
-    let _ = events.send(Event::Ready);
+        started: Instant::now(),
+        last_packet: Instant::now(),
+        limit_reached: false,
+    })
+}
+fn finish(
+    mut active: Active,
+    stream: &mut Option<wasapi::Stream>,
+    cancel: bool,
+    error: Option<String>,
+) {
+    let stopped = stream.as_mut().map(|s| s.stop());
+    let tail = if !cancel && error.is_none() {
+        stream.as_mut().map(|s| active.read(s))
+    } else {
+        None
+    };
+    let failure = error
+        .or_else(|| stopped.and_then(Result::err))
+        .or_else(|| tail.and_then(Result::err));
+    if failure.is_some() {
+        *stream = None;
+    }
+    if cancel || active.request.cancelled.load(Ordering::Acquire) {
+        let _ = active
+            .request
+            .events
+            .send(Event::Finished(Err("Cancelled".into())));
+        return;
+    }
+    if let Some(error) = failure {
+        let _ = active.request.events.send(Event::Finished(Err(error)));
+        return;
+    }
+    // Encoding is separate from ownership of the prepared endpoint: another
+    // shortcut can start capture immediately without waiting for this work.
+    std::thread::spawn(move || {
+        let result = encode(&active);
+        let _ = active.request.events.send(Event::Finished(result));
+    });
+}
+fn worker(rx: mpsc::Receiver<Request>) {
+    let apartment = wasapi::Apartment::enter();
+    let mut configured = Settings::default();
+    let mut stream = None;
+    let mut active: Option<Active> = None;
     loop {
-        match stop.recv_timeout(Duration::from_millis(50)) {
-            Ok(true) | Err(mpsc::RecvTimeoutError::Disconnected) => return Err("Cancelled".into()),
-            Ok(false) => break,
+        let command = if active.is_some() {
+            rx.recv_timeout(Duration::from_millis(50))
+        } else {
+            rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+        match command {
+            Ok(Request::Configure(settings)) => {
+                let changed = settings.microphone != configured.microphone;
+                configured = settings;
+                if active.is_none() {
+                    if changed || !configured.prepare_microphone {
+                        stream = None;
+                    }
+                    if configured.prepare_microphone && stream.is_none() && apartment.is_ok() {
+                        stream = wasapi::Stream::open(&configured.microphone).ok();
+                    }
+                }
+            }
+            Ok(Request::Start(request)) => {
+                if let Some(previous) = active.take() {
+                    finish(previous, &mut stream, true, None);
+                }
+                if request.settings.microphone != configured.microphone {
+                    stream = None;
+                }
+                configured = request.settings.clone();
+                let result = if let Err(error) = &apartment {
+                    Err(error.clone())
+                } else {
+                    begin(&request, &mut stream)
+                };
+                match result {
+                    Ok(recording) => {
+                        let _ = request.events.send(Event::Ready);
+                        active = Some(recording);
+                    }
+                    Err(error) => {
+                        stream = None;
+                        let _ = request.events.send(Event::Finished(Err(error)));
+                    }
+                }
+            }
+            Ok(Request::Stop(id, cancel)) => {
+                if active.as_ref().is_some_and(|v| v.request.id == id) {
+                    finish(active.take().unwrap(), &mut stream, cancel, None);
+                    if !configured.prepare_microphone {
+                        stream = None;
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(recording) = active.take() {
+                    finish(recording, &mut stream, true, None);
+                }
+                break;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+            #[cfg(test)]
+            Ok(Request::Barrier(tx)) => {
+                let _ = tx.send(());
+            }
         }
-        let d = data.lock().map_err(|_| "Audio buffer unavailable.")?;
-        if d.error {
-            return Err(
-                "Microphone disconnected or failed during capture. Nothing was sent.".into(),
-            );
-        }
-        let frames = d.samples.len();
-        let _ = events.send(Event::Meter {
-            level: (d.rms * 8.0).min(1.0),
-            seconds: frames as f32 / rate as f32,
-        });
-        if frames >= max
-            || silence_expired(
-                frames,
-                d.last_voice,
-                rate,
-                s.silence_seconds,
-                silence.load(Ordering::Relaxed),
-            )
-        {
-            break;
+        if let Some(recording) = active.as_mut() {
+            let mut error = stream
+                .as_mut()
+                .ok_or("Microphone is unavailable.".to_string())
+                .and_then(|s| recording.read(s))
+                .err();
+            let cancel = recording.request.cancelled.load(Ordering::Acquire);
+            let frames = recording.samples.len();
+            if recording.last_packet.elapsed() > Duration::from_secs(2) {
+                error=Some("Your microphone stopped sending audio. Reconnect it or choose another device. Nothing was sent.".into());
+            }
+            recording.limit_reached = frames >= recording.max
+                || recording.started.elapsed()
+                    >= Duration::from_secs(recording.request.settings.max_seconds as u64);
+            let stopped = recording.limit_reached
+                || silence_expired(
+                    frames,
+                    recording.last_voice,
+                    recording.rate,
+                    recording.request.settings.silence_seconds,
+                    recording.request.silence.load(Ordering::Relaxed),
+                );
+            let _ = recording.request.events.send(Event::Meter {
+                level: (recording.rms * 8.0).min(1.0),
+                seconds: frames as f32 / recording.rate as f32,
+            });
+            if cancel || stopped || error.is_some() {
+                let failed = error.is_some();
+                finish(active.take().unwrap(), &mut stream, cancel, error);
+                if failed || !configured.prepare_microphone {
+                    stream = None;
+                }
+            }
         }
     }
-    drop(stream);
-    let mut d = data.lock().map_err(|_| "Audio buffer unavailable.")?;
-    if d.error {
-        return Err("Microphone failed. Nothing was sent.".into());
-    }
-    if d.voice_frames < (rate as usize * 15 / 100) {
+}
+fn encode(active: &Active) -> Result<Recording, String> {
+    if active.voice_frames < active.rate as usize * 15 / 100 {
         return Err(
-            "No speech detected. Check your microphone or adjust voice sensitivity.".into(),
+            "I couldn't hear any speech. Check your microphone or adjust voice sensitivity.".into(),
         );
     }
-    let duration_ms = d.samples.len() as u64 * 1000 / rate as u64;
-    let samples = std::mem::take(&mut d.samples);
-    drop(d);
-    let mono = resample(&samples, rate);
+    let started = Instant::now();
+    let mono = resample(&active.samples, active.rate);
     let mut cursor = Cursor::new(Vec::with_capacity(mono.len() * 2 + 44));
     {
         let spec = hound::WavSpec {
@@ -218,20 +361,22 @@ fn capture(
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let mut writer =
-            hound::WavWriter::new(&mut cursor, spec).map_err(|_| "Could not encode audio.")?;
-        for v in mono {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec)
+            .map_err(|_| "Could not prepare your recording.")?;
+        for value in mono {
             writer
-                .write_sample((v.clamp(-1.0, 1.0) * 32767.0) as i16)
-                .map_err(|_| "Could not encode audio.")?;
+                .write_sample((value.clamp(-1.0, 1.0) * 32767.0) as i16)
+                .map_err(|_| "Could not prepare your recording.")?;
         }
         writer
             .finalize()
-            .map_err(|_| "Could not finish audio encoding.")?;
+            .map_err(|_| "Could not finish your recording.")?;
     }
     Ok(Recording {
         wav: cursor.into_inner(),
-        duration_ms,
+        duration_ms: active.samples.len() as u64 * 1000 / active.rate as u64,
+        limit_reached: active.limit_reached || active.samples.len() >= active.max,
+        encoding_ms: started.elapsed().as_millis() as u64,
     })
 }
 fn silence_expired(
@@ -241,56 +386,9 @@ fn silence_expired(
     seconds: u32,
     hands_free: bool,
 ) -> bool {
-    hands_free && frames.saturating_sub(last_voice) > rate as usize * seconds as usize
-}
-fn stream<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    data: Arc<Mutex<Buffer>>,
-    channels: usize,
-    max: usize,
-    threshold: f32,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
-where
-    T: cpal::SizedSample,
-    f32: cpal::FromSample<T>,
-{
-    let errors = data.clone();
-    device.build_input_stream(
-        config,
-        move |input: &[T], _| {
-            if let Ok(mut d) = data.lock() {
-                let mut power = 0.0;
-                let start = d.samples.len();
-                for frame in input.chunks_exact(channels) {
-                    if d.samples.len() >= max {
-                        break;
-                    }
-                    let value =
-                        frame.iter().map(|v| v.to_sample::<f32>()).sum::<f32>() / channels as f32;
-                    let value = if value.is_finite() { value } else { 0.0 };
-                    power += value * value;
-                    d.samples.push(value);
-                }
-                let count = d.samples.len() - start;
-                d.rms = if count == 0 {
-                    0.0
-                } else {
-                    (power / count as f32).sqrt()
-                };
-                if d.rms >= threshold {
-                    d.voice_frames += count;
-                    d.last_voice = d.samples.len();
-                }
-            }
-        },
-        move |_| {
-            if let Ok(mut d) = errors.lock() {
-                d.error = true;
-            }
-        },
-        None,
-    )
+    hands_free
+        && seconds > 0
+        && frames.saturating_sub(last_voice) > rate as usize * seconds as usize
 }
 /// A 32-tap Hann-windowed sinc low-pass avoids naive-decimation aliasing.
 fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
@@ -357,13 +455,17 @@ mod tests {
     use super::*;
     #[test]
     fn cancellation_before_capture_never_opens_a_stream() {
-        let (stop, rx) = mpsc::channel();
         let (events, event_rx) = mpsc::channel();
-        stop.send(true).unwrap();
-        assert_eq!(
-            capture(&Settings::default(), &events, rx, &AtomicBool::new(false)).unwrap_err(),
-            "Cancelled"
-        );
+        let request = Start {
+            id: 1,
+            settings: Settings::default(),
+            events,
+            cancelled: Arc::new(AtomicBool::new(true)),
+            silence: Arc::new(AtomicBool::new(false)),
+        };
+        let mut stream = None;
+        assert_eq!(begin(&request, &mut stream).err().unwrap(), "Cancelled");
+        assert!(stream.is_none());
         assert!(event_rx.try_recv().is_err());
     }
     #[test]
@@ -412,6 +514,79 @@ mod tests {
     fn push_to_talk_does_not_stop_during_a_pause() {
         assert!(!silence_expired(160000, 0, 16000, 8, false));
         assert!(silence_expired(160000, 0, 16000, 8, true));
+        assert!(!silence_expired(160000, 0, 16000, 0, true));
+    }
+    #[test]
+    #[ignore = "Prepares the actual microphone and tests three captures, without upload or audio files."]
+    fn prepared_worker_first_frames_and_cancellation() {
+        let settings = Settings::default();
+        let engine = Engine::new(settings.clone());
+        let (tx, rx) = mpsc::channel();
+        engine.tx.send(Request::Barrier(tx)).unwrap();
+        rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        for _ in 0..3 {
+            let (tx, rx) = mpsc::channel();
+            let started = Instant::now();
+            let capture = engine.start(settings.clone(), tx);
+            loop {
+                match rx.recv_timeout(Duration::from_secs(3)).unwrap() {
+                    Event::Ready => println!(
+                        "Prepared worker Ready: {} ms",
+                        started.elapsed().as_millis()
+                    ),
+                    Event::Meter { seconds, .. } if seconds > 0.0 => {
+                        println!(
+                            "Prepared worker first frames: {} ms",
+                            started.elapsed().as_millis()
+                        );
+                        break;
+                    }
+                    Event::Finished(result) => panic!("Capture ended before frames: {result:?}"),
+                    _ => {}
+                }
+            }
+            capture.cancel();
+            loop {
+                if let Event::Finished(result) = rx.recv_timeout(Duration::from_secs(3)).unwrap() {
+                    assert_eq!(result.unwrap_err(), "Cancelled");
+                    break;
+                }
+            }
+        }
+    }
+    #[test]
+    fn recordings_longer_than_two_minutes_keep_their_tail() {
+        let rate = 16000;
+        let mut samples = vec![0.2; rate * 125];
+        *samples.last_mut().unwrap() = 0.7;
+        let (events, _) = mpsc::channel();
+        let active = Active {
+            request: Start {
+                id: 1,
+                settings: Settings::default(),
+                events,
+                cancelled: Arc::new(AtomicBool::new(false)),
+                silence: Arc::new(AtomicBool::new(false)),
+            },
+            samples,
+            rate: rate as u32,
+            max: rate * 600,
+            rms: 0.2,
+            voice_frames: rate * 125,
+            last_voice: rate * 125,
+            started: Instant::now(),
+            last_packet: Instant::now(),
+            limit_reached: false,
+        };
+        let result = encode(&active).unwrap();
+        assert_eq!(result.duration_ms, 125000);
+        assert!(!result.limit_reached);
+        let reader = hound::WavReader::new(Cursor::new(result.wav)).unwrap();
+        assert_eq!(reader.duration(), (rate * 125) as u32);
+        assert_eq!(
+            reader.into_samples::<i16>().last().unwrap().unwrap(),
+            (0.7 * 32767.0) as i16
+        );
     }
     #[test]
     fn resampler_keeps_duration_and_silence() {

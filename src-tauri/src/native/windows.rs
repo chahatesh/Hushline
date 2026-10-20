@@ -246,12 +246,23 @@ fn process_name(pid: u32) -> Option<String> {
             .map(|s| s.to_string_lossy().into_owned())
     }
 }
+#[cfg(test)]
 pub fn insert(
     target: &Target,
     text: &str,
     method: &str,
     authorized_preview: bool,
     cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String> {
+    insert_with_notice(target, text, method, authorized_preview, cancel, None)
+}
+pub fn insert_with_notice(
+    target: &Target,
+    text: &str,
+    method: &str,
+    authorized_preview: bool,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
@@ -295,7 +306,7 @@ pub fn insert(
     if method == "clipboard" {
         // paste_text performs the final UIA check after preparing the clipboard.
         // Avoid two redundant provider traversals on the insertion critical path.
-        return super::clipboard::paste_text(target, text, authorized_preview, cancel);
+        return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
     }
     let final_check = capture_target(!target.selected.is_empty())?;
     if !target_matches(target, &final_check, authorized_preview) {

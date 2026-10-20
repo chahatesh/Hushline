@@ -126,12 +126,59 @@ unsafe fn restore(all: &[(u32, Vec<u8>)]) -> Result<()> {
     }
     Ok(())
 }
+struct PendingRestore {
+    owner: Owner,
+    saved: Vec<(u32, Vec<u8>)>,
+    sequence: u32,
+    delivered: bool,
+}
 pub fn paste_text(
     target: &Target,
     text: &str,
     explicit: bool,
     cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
+    let target = target.clone();
+    let text = text.to_string();
+    let token = cancel.child_token();
+    let worker_token = token.clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(
+        move || match prepare_paste(&target, &text, explicit, &worker_token) {
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
+            Ok(pending) => {
+                let _ = tx.send(if pending.delivered {
+                    Ok(String::new())
+                } else {
+                    Err(
+                        "The field changed or Windows blocked paste. Your text is ready to copy."
+                            .into(),
+                    )
+                });
+                let warning = restore_later(pending);
+                if let Some(notice) = notice {
+                    notice(warning);
+                }
+            }
+        },
+    );
+    match rx.recv_timeout(Duration::from_millis(1800)) {
+        Ok(result) => result,
+        Err(_) => {
+            token.cancel();
+            Err("This field took too long to respond. Your text is ready to copy.".into())
+        }
+    }
+}
+fn prepare_paste(
+    target: &Target,
+    text: &str,
+    explicit: bool,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<PendingRestore> {
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
@@ -180,6 +227,20 @@ pub fn paste_text(
         ];
         delivered = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) } == 4;
     }
+    Ok(PendingRestore {
+        owner,
+        saved,
+        sequence,
+        delivered,
+    })
+}
+fn restore_later(pending: PendingRestore) -> String {
+    let PendingRestore {
+        owner,
+        saved,
+        sequence,
+        ..
+    } = pending;
     std::thread::sleep(Duration::from_millis(600));
     let mut warning = String::new();
     if unsafe { GetClipboardSequenceNumber() } == sequence {
@@ -196,15 +257,8 @@ pub fn paste_text(
                     " Clipboard remained busy; the transcript may still be on the clipboard.".into()
             }
         }
-    } else {
-        warning = " Newer clipboard contents were preserved.".into();
     }
-    if !delivered {
-        return Err(format!(
-            "Target changed or Windows blocked paste. Transcript preserved.{warning}"
-        ));
-    }
-    Ok(format!("Paste shortcut delivered; the receiving application does not provide a delivery receipt.{warning}"))
+    warning
 }
 
 #[cfg(test)]
@@ -344,15 +398,22 @@ mod integration_tests {
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(h.text(), "Hello Hushline");
         let target = crate::native::capture_target(false).unwrap();
-        crate::native::insert(
+        let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
+        crate::native::insert_with_notice(
             &target,
             " clipboard",
             "clipboard",
             false,
             &CancellationToken::new(),
+            Some(Box::new(move |warning| {
+                let _ = cleanup_tx.send(warning);
+            })),
         )
         .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        assert!(cleanup_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_empty());
         assert_eq!(h.text(), "Hello Hushline clipboard");
         {
             let _lock = open(guard.owner.0).unwrap();

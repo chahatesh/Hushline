@@ -49,6 +49,16 @@ try {
   await native(main,'action',{name:'cancel'});await waitFor(async()=>(await native(main,'snapshot')).view.phase==='idle');
   assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
   report.checks.nativeMicrophoneTestCancel=true;
+  // Exercise normal Stop and its final-frame drain through real IPC, still in
+  // microphone-test mode: neither success nor silence rejection uploads audio.
+  await native(main,'action',{name:'test'});
+  await waitFor(async()=>(await native(main,'snapshot')).view.seconds>=0.35);
+  await native(main,'action',{name:'test'});
+  const stopped=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return view.phase!=='listening'?view:false;});
+  assert(stopped.phase==='success'||stopped.message.includes("couldn't hear any speech"),`Microphone Stop failed: ${stopped.message}`);
+  assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
+  report.checks.nativeMicrophoneNormalStopNoUpload=stopped.phase==='success'?'passed: WAV completed':'passed: silent recording rejected';
+  await native(main,'action',{name:'cancel'});
   const backup=await native(main,'export_configuration');assert(!('apiKey' in backup)&&!('history' in backup)&&!('scratchpad' in backup));report.checks.nativeBackupExcludesSensitiveData=true;
   report.checks.liveGroqToNotepad='not tested: no live provider request; native insertion harness could not acquire foreground';
   const closed=main.waitForEvent('close',{timeout:10000});

@@ -79,3 +79,20 @@ test('shortcut recorder and dedicated-key preset remain editable', async ({ page
   await page.reload();
   await expect(page.locator('.dictate-card .keys')).toContainText('R');
 });
+
+test('fast microphone preparation and pause behavior are explicit preferences', async ({ page }) => {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'Fast microphone startup' })).toBeChecked();
+  await page.getByRole('switch', { name: 'Fast microphone startup' }).uncheck();
+  await page.getByRole('tab', { name: 'Dictation', exact: true }).click();
+  await expect(page.getByLabel('Maximum recording (seconds)', { exact: true })).toHaveValue('600');
+  await expect(page.getByRole('switch', { name: 'Stop hands-free recording when I go quiet' })).not.toBeChecked();
+  await page.getByRole('switch', { name: 'Stop hands-free recording when I go quiet' }).check();
+  await expect(page.getByLabel('Wait this many seconds', { exact: true })).toHaveValue('15');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'Fast microphone startup' })).not.toBeChecked();
+  await page.getByRole('tab', { name: 'Dictation', exact: true }).click();
+  await expect(page.getByLabel('Wait this many seconds', { exact: true })).toHaveValue('15');
+});
