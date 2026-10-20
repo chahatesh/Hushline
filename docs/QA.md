@@ -97,3 +97,17 @@ The final optimized executable and NSIS package built successfully. Installer: 2
 - Release verification now compares evidence with the package version rather than a stale literal. It correctly rejects the incomplete acceptance report. No release tag or GitHub Release was created.
 
 See [native desktop](verification/desktop-smoke-0.2.0.json), [installer](verification/installer-test-0.2.0.json), and [update record](verification/update-0.2.0.json). Live provider-to-application delivery, real paste/restoration, actual Ollama editing, Base accuracy, mixed-DPI monitors and independent clean-machine acceptance remain open.
+
+## 0.2.1 update — 2026-10-19
+
+The recording delay was isolated to repeated stream initialization. A native stopped-client experiment prepared in 1,179 ms; three direct Start trials produced first frames in 25/8/7 ms. The integrated worker's final three prepared starts reported Ready in **21/5/4 ms** and actual frames in **21/68/61 ms**, with successful cancellation each time. These are specific hardware/debug observations after preparation, not universal instant-start claims. Preparation has an off switch; the idle worker reads no audio and blocks on commands.
+
+The final ordinary Rust suite passed **49 tests** with eight explicit device/provider tests ignored; formatting and Clippy with warnings denied passed. TypeScript tests passed **5**, browser interface tests **9**. The restricted browser run could not reach its preview server and was stopped; the normal desktop run passed. Reproduced formatter failures covered natural list introductions, long paragraphs containing line breaks, and repeated words/restarts. A synthetic 125-second WAV preserved its exact final sample. A full long spoken session still needs manual acceptance.
+
+The native overlay passed per-pixel surface acceptance, active opacity, dimensions, no foreground activation and idle hiding. Fractional alpha/premultiplication tests passed and actual native rendered pixels were inspected. The mic symbol is absent. The real insertion harness still failed safely at foreground acquisition before dispatch; clipboard/new asynchronous completion compatibility remains unverified.
+
+A **real Groq** request using the saved key transcribed the public upstream JFK fixture in **2,542 ms**, returning 22 words and the expected phrase. The key was neither printed nor replaced, and no private microphone audio or history was uploaded. This proves that fixture/provider path, not microphone-to-Notepad acceptance.
+
+The qwen3:0.6b feasibility benchmark used synthetic text, a separate cloud-disabled service and workspace-only weights; it measured significant active RAM and 3–15 s edits. Its service was stopped. The longer fixture did not gain paragraphs. See LOCAL_MODEL.md and verification/local-model-0.2.1.json; this trial does not establish broad model quality.
+
+The previous hosted run passed its functional checks, real offline fixture and installer build, then failed because its child PowerShell could not resolve Get-FileHash during portable packaging. The portable script now uses standard .NET SHA-256 directly. No failure was relabeled as success; the next hosted result and packaged-runtime evidence are recorded below when available. No release tag is created while core acceptance is open.

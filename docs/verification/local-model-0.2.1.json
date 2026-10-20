@@ -1,0 +1,58 @@
+{
+  "model": "qwen3:0.6b",
+  "scope": "Synthetic English editing fixtures; own CPU service, four threads, 2048 context; not speech recognition or general quality certification",
+  "samples": [
+    {
+      "input": "um I I I want to send the report to Maya on Thursday at 3 pm and and make sure the build number is v2.4.1",
+      "output": "I want to send the report to Maya on Thursday at 3 p.m. and ensure the build number is v2.4.1.",
+      "wallMs": 14616,
+      "loadMs": 10015,
+      "evaluationMs": 1668,
+      "generatedTokens": 30,
+      "doneReason": "stop",
+      "observedResidentWorkingSetMiB": 570.95
+    },
+    {
+      "input": "Meeting notes. First, review the draft. Second, test the installer. Third, email Maya at maya@example.com.",
+      "output": "- Review draft.  \n- Test installer.  \n- Email Maya at maya@example.com.",
+      "wallMs": 3403,
+      "loadMs": 720,
+      "evaluationMs": 1265,
+      "generatedTokens": 20,
+      "doneReason": "stop",
+      "observedResidentWorkingSetMiB": 237.22
+    },
+    {
+      "input": "We reviewed the release today. The build passed all checks. The installer still needs testing on another machine. We should preserve the current configuration during an upgrade. The API endpoint is https://example.com/v2 and the variable is useState. On another note, we need to prepare the documentation. Maya will review it on Thursday. Please keep the deadline at 3 pm and do not change build number v2.4.1.",
+      "output": "We reviewed the release today. The build passed all checks. The installer still needs testing on another machine. We should preserve the current configuration during an upgrade. The API endpoint is https://example.com/v2 and the variable is useState. On another note, we need to prepare the documentation. Maya will review it on Thursday. Please keep the deadline at 3 pm and do not change build number v2.4.1.",
+      "wallMs": 10800,
+      "loadMs": 516,
+      "evaluationMs": 6624,
+      "generatedTokens": 87,
+      "doneReason": "stop",
+      "observedResidentWorkingSetMiB": 40.11
+    }
+  ],
+  "runtime": {
+    "version": "0.12.5"
+  },
+  "idleServerWorkingSetMiB": 42.82,
+  "modelInfo": {
+    "name": "qwen3:0.6b",
+    "model": "qwen3:0.6b",
+    "modified_at": "2026-10-19T20:19:34.133724-04:00",
+    "size": 522653767,
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "details": {
+      "parent_model": "",
+      "format": "gguf",
+      "family": "qwen3",
+      "families": [
+        "qwen3"
+      ],
+      "parameter_size": "751.63M",
+      "quantization_level": "Q4_K_M"
+    }
+  },
+  "measuredEnvironment": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM; concurrent Rust build"
+}

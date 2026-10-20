@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 — unreleased
+
+- Remove the microphone drawing from the voice bar, reduce its footprint, and replace clipped window-region corners with smooth per-pixel alpha.
+- Prepare a stopped native WASAPI client in advance for faster recording activation. Add a setting to disable preparation; no audio is read while idle.
+- Drain final frames, reset between sessions, detect packet loss/device stalls, and keep encoding independent of the next recording.
+- Raise the old two-minute default to ten minutes and make silence stopping opt-in so thinking pauses do not end hands-free dictation.
+- Improve paragraphs within existing line breaks, everyday list introductions, repeated words/restarts, and natural interface wording.
+- Acknowledge paste before its background clipboard restoration delay; retain format/sequence/focus safeguards and cleanup warnings.
+- Guard optional AI edits against missing content/identifiers/numbers, reduce supported reasoning overhead, and prevent local context truncation.
+- Benchmark a small local text model without installing a service or changing the user's Ollama configuration. Keep AI processing optional.
+- Fix portable-package hashing in the hosted Windows build using the standard .NET SHA-256 implementation.
+
 ## 0.2.0 — unreleased
 
 - Fix overlapping shortcut release routing, paired key-up handling, and rapid reactivation; ordinary Space presses do not open the dashboard.

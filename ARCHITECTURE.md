@@ -7,7 +7,7 @@ Hushline targets Windows 10/11 x64. Rust owns recording, credentials, storage, i
 ```
 Windows low-level keyboard/mouse hooks
   → action channel → Rust session actor
-  → dedicated WASAPI capture thread (CPAL)
+  → dedicated native WASAPI owner thread
   → 16 kHz mono PCM WAV in memory
   → Groq /audio/transcriptions
   → conservative local normalization + exact dictionary rules
@@ -15,13 +15,15 @@ Windows low-level keyboard/mouse hooks
   → validate original target → Unicode input or guarded paste
 ```
 
-The hook thread has a Windows message pump and performs no microphone, disk, HTTP, or accessibility calls. A channel forwards events to the actor. Input hooks ignore injected input. The capture stream exists only while recording. A preallocated mono buffer bounds audio memory by the configured recording duration. Meter events are limited to 20 Hz during capture; there is no idle audio polling. Energy detection stops sustained silence and suppresses very quiet recordings; it is not a semantic speech classifier. A Hann-windowed sinc filter resamples device audio before 16-bit WAV encoding. Recordings are never written to disk.
+The hook thread has a Windows message pump and performs no microphone, disk, HTTP, or accessibility calls. A channel forwards events to the actor. Input hooks ignore injected input. With fast startup enabled, the audio thread prepares a **stopped** WASAPI client asynchronously when the app opens. It calls Start only for an explicit recording and Stop/Reset between sessions. No samples are read while idle; its command receiver blocks without a timer. Disabling fast startup releases the prepared client. CPAL is retained only for microphone-name enumeration.
+
+A fallibly preallocated mono buffer exists only during a recording/encoding job and bounds memory by the configured duration. Meter events are limited to 20 Hz during capture. Default-device identity is checked on activation, packet discontinuity and missing data are surfaced, and the last buffered frames are drained after Stop. Encoding runs separately from endpoint ownership so a new press does not wait for the previous resampling job. Energy-based silence stopping is optional and off by default; it never stops hold-to-talk. The ten-minute default/max is explicit. A Hann-windowed sinc filter resamples device audio before 16-bit WAV encoding. Recordings are never written to disk.
 
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
-| `audio.rs` | Device enumeration, capture lifecycle, metering, silence limits, resampling, encoding |
+| `audio.rs`, `audio/wasapi.rs` | Stopped-client preparation, native Start/Stop/Reset, device identity, packet reading, metering, limits and encoding |
 | `shortcuts.rs`, `native/hooks.rs` | Chord validation, event-driven global hooks, focus/input invalidation |
 | `groq.rs` | Shared HTTP client, Groq multipart speech requests, model discovery, optional text editing, retry/cancellation |
 | `text.rs` | Conservative cleanup, whole-phrase single-pass replacements, exact-trigger snippets, validation |
@@ -37,7 +39,7 @@ The hook thread has a Windows message pump and performs no microphone, disk, HTT
 
 Each recording snapshots the foreground HWND, UI Automation runtime ID, selected-range geometry, and an input/focus generation. Command Mode additionally reads only the selected text after opt-in. Completion rechecks the same identity, geometry, protection, and generation. Input or focus changes preserve the transcript for manual recovery. A Command Mode approval may explicitly bring the original window forward; its exact selection and geometry must still match. No selection is blindly restored. A final validation occurs immediately before dispatch; Windows does not offer an atomic cross-process focus-and-insert transaction, so a small remaining race is documented.
 
-Unicode input avoids clipboard mutation. Optional paste mode snapshots global-memory formats and refuses unsupported formats before clearing. Clipboard sequence numbers prevent restoration over newer copied content. Dispatch is not a universal delivery receipt. Automatic terminal insertion is intentionally blocked to prevent pasted newlines from executing commands.
+Unicode input avoids clipboard mutation. Default paste mode snapshots global-memory formats and refuses unsupported formats before clearing. An owned worker acknowledges after guarded dispatch, then retains its clipboard owner for the conservative 600-ms restoration delay. The completion UI no longer waits for that delay. Cleanup notices travel separately to the actor. Clipboard sequence numbers prevent restoration over newer copied content. A bounded provider wait cancels a late paste attempt. Dispatch is not a universal delivery receipt. Automatic terminal insertion is intentionally blocked to prevent pasted newlines from executing commands.
 
 ## Privacy and network boundaries
 
@@ -60,3 +62,9 @@ Clipboard paste is the default. Its final target check replaces two redundant UI
 The GDI overlay has an idle resting pill and bottom/left/right geometry. Only active processing and the 160-ms size/opacity transition use timers; microphone meter events repaint capture. Idle has no timer. It uses a double-buffered surface, a rounded window region, full active alpha, and `WS_EX_NOACTIVATE`. Dock/monitor changes snap rather than flying across the screen. Dashboard and native bar share settings but do not share a webview.
 
 `text::format` performs local structural whitespace/list transformations after normalization. It keeps existing explicit newlines and bypasses Literal/non-English transformations. Technical spans are excluded from sentence splitting. Optional AI cleanup remains a separate opt-in path.
+
+## 0.2.1 changes
+
+The native bar is a 48×16 logical-pixel resting capsule (16×48 at the side), expanding to 136×30 at the bottom or 30×112 at the side. No microphone icon is drawn. A signed-distance coverage rasterizer supplies premultiplied per-pixel alpha to UpdateLayeredWindow, preserving antialiased outer pixels that a binary window region clipped. The waveform, cancel target and accessible window title remain; no idle rendering timer was added.
+
+Local formatting handles natural list introductions and repeated restart fragments, and processes long prose within explicit line breaks rather than bypassing the whole transcript. Automatic AI cleanup rejects missing identifiers/numbers or substantial shortening; this is a conservative guard, not semantic proof. Command Mode retains its explicit authority to shorten selected text. GPT-OSS editing requests use Groq's documented low reasoning effort; unrelated configurable models are not sent that field. Local Ollama edits disable thinking and reserve an explicit context/output budget, rejecting oversized inputs instead of relying on a truncating default. Models still unload after editing. See the small-model trial in docs/LOCAL_MODEL.md.

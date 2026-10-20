@@ -91,3 +91,13 @@ Measured 2026-10-19T23:54:42.6694110Z, after the build finished, using executabl
 | Dashboard launch-to-heading observation | **3896 ms**, including test-only CDP overhead |
 
 This is one fresh-background run on the hardware above, not a guarantee or a measurement during inference. Model decoding and the open dashboard add resource use. Rounded zero CPU does not mean no CPU instructions execute. The earlier dashboard smoke observation was 4,770 ms; neither is a pure cold-start percentile. The live microphone-to-target path remains unmeasured. See [background record](verification/performance-0.2.0.json).
+
+## 0.2.1 recording and provider measurements
+
+Same documented hardware, 2026-10-19. A stopped native WASAPI client prepared once in 1,179 ms; direct starts subsequently produced frames in 25/8/7 ms. The final audio worker reported **21/5/4 ms to Ready** and **21/68/61 ms to first received frames** for three starts. It checks default-device identity and runs capture/metering at up to 20 Hz while active. Idle preparation is stopped: there is no sample read loop, resident speech model or idle audio timer. The initial preparation cost is not eliminated; settings/device changes or an early press can still incur it. These are debug observations and not a 95th-percentile/hardware-wide guarantee.
+
+One actual Groq Turbo request processed the approximately 11-second public JFK fixture in **2,542 ms**, cold HTTP client, including DNS/TLS/upload/server work/parsing. This excludes microphone initialization, speaking time, local formatting and target insertion. The configured key was used without printing or modifying it; private speech was not uploaded. A true release-to-text latency distribution remains unmeasured.
+
+Paste completion now acknowledges dispatch before the conservative 600-ms restoration job finishes. Restoration still retains its owner and sequence-number guards. This removes a fixed wait from completion UI; receiving-application timing is not verified because Windows refused the test harness's foreground acquisition.
+
+The small local text-model trial added 3,403–14,616 ms and substantial active memory; it is kept optional. See LOCAL_MODEL.md for cache/load/quality and memory-pressure limits. The final packaged background measurement is recorded below; 15.94 MiB in the prior section is the 0.2.0 baseline.

@@ -14,6 +14,7 @@ Hushline is not affiliated with, endorsed by, or an official product of Wispr Fl
 ## What is here
 
 - Push-to-talk, hands-free recording, editable shortcuts, optional double-tap activation, Escape cancellation, tray lifecycle, and a nonactivating waveform overlay.
+- A smaller, smooth-edged voice pill without a mic icon. Fast startup prepares a stopped microphone client; the recorder reads audio only after activation. Default recordings allow ten minutes, with silence stopping optional.
 - Native WASAPI capture through CPAL, energy-based silence detection, bounded recording duration, in-memory 16 kHz mono WAV encoding, and asynchronous Groq speech requests.
 - Optional offline Whisper Tiny/Base packs with verified downloads, local notes/bullets/paragraph layout, and optional editing through an installed local Ollama model. Tiny file transcription was tested; live offline delivery and Ollama editing remain unverified.
 - Fast mode by default: Whisper transcription → conservative local cleanup → insertion. An extra text-model call happens only when enhanced/polished processing or a matching AI writing style is enabled, or in Command Mode.
@@ -27,8 +28,8 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 Source is available at [chahatesh/Hushline](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. Locally built artifacts, when generated, are in:
 
-- `src-tauri/target/release/bundle/nsis/Hushline_0.2.0_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
-- `artifacts/Hushline_0.2.0_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
+- `src-tauri/target/release/bundle/nsis/Hushline_0.2.1_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
+- `artifacts/Hushline_0.2.1_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
 The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key and clear history in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 
@@ -47,6 +48,10 @@ The installer is unsigned unless a maintainer signs it with their own certificat
 3. Choose a microphone and save settings. Use **Test** to check capture; microphone tests send no audio to Groq.
 4. Focus an editable field in Notepad. Hold **Ctrl + Win**, speak, then release.
 5. Stay in that field until processing ends. If focus changes, the text is preserved in Hushline; copy it or focus your intended field and use the paste-last shortcut.
+
+Fast microphone startup is on by default. After initial preparation, three native trials delivered audio frames in 21–68 ms here; this is not a hardware-wide guarantee. Preparation itself is asynchronous and can take around a second. Disable it in General if you prefer releasing the stopped audio client between recordings. Neither mode reads idle audio. Cloud recognition starts after you finish speaking; a public 11-second fixture took 2.54 seconds in one real Groq request. Insertion/end-to-end latency remains separately unverified.
+
+For longer speech, automatic layout adds paragraphs and turns clear lists into • bullets without an LLM. Extra AI polishing is optional. A small local-model trial added 3–15 seconds and substantial active memory; see [the measured tradeoff](docs/LOCAL_MODEL.md). It is not enabled automatically.
 
 The default speech model is `whisper-large-v3-turbo`. Choose `whisper-large-v3` for the accuracy option. Automatic language detection is the default; a selected language sends the supported `language` parameter. Verbose transcription metadata identifies the language without an extra inference call. English filler/formatting rules run only for confirmed English; other or unknown languages preserve recognized wording locally, with optional explicit AI processing. Dictionary hints use `prompt`; the app does not invent a streaming endpoint. Available text models are checked before AI editing, with `openai/gpt-oss-20b` and `openai/gpt-oss-120b` as configurable defaults. See [Groq speech documentation](https://console.groq.com/docs/speech-to-text), [API reference](https://console.groq.com/docs/api-reference), and [model list](https://console.groq.com/docs/models).
 

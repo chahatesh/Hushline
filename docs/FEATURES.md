@@ -19,7 +19,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Escape cancellation and rapid reactivation | Partially Implemented | Cancellation tokens, generations, and idle/modifier Escape routing tested. Real rapid capture/insertion tests pending. |
 | Custom keyboard and Mouse4/5 bindings | Partially Implemented | Chord parser and duplicate/conflict tests pass; real extra-mouse-button tests pending. Conflicts with other software cannot all be detected. |
 | Copy/paste last, dashboard/scratchpad shortcuts | Partially Implemented | Code paths and UI controls exist; global delivery verification pending. |
-| Groq transcription, model/language/vocabulary parameters | Partially Implemented | Documented multipart fields verified using a local HTTP server. No live Groq key was available. |
+| Groq transcription, model/language/vocabulary parameters | Partially Implemented | Documented multipart fixtures pass. A saved-key public speech fixture passed through Groq Turbo in 2,542 ms; live microphone-to-target acceptance remains open. |
 | Whisper Turbo / accuracy model choice, multilingual recognition | Partially Implemented | Real supported model IDs and language parameter configured; live multilingual accuracy not tested. |
 | Timeout, network error, retry, rate-limit, cancellation handling | Partially Implemented | Executed loopback fixtures verify multipart, retry, 401, 429, cancellation, and truncated AI responses. Live provider interruption/rate tests pending. |
 | Model discovery and configurable Groq text models | Partially Implemented | Native discovery/cache and dashboard configuration exist; live account model availability unverified. |
@@ -57,7 +57,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Automatic signed updater / update checks | Not Implemented | Manual trusted installer updates only. |
 | Diagnostics / benchmark report | Partially Implemented | Local test reports, history timing, and process-tree measurement script. Actual measured results and gaps are in PERFORMANCE.md. No in-app diagnostic bundle or update service. |
 | Public repository / downloadable GitHub Release | Partially Implemented | Public repository created at https://github.com/chahatesh/Hushline. Source publication and hosted checks are tracked in QA; no unverified GitHub Release is published. |
-| CI/CD workflows | Partially Implemented | Windows lint/test/build/package and gated draft-release workflows written; no hosted run without a published repository. |
+| CI/CD workflows | Partially Implemented | Windows lint/test/build/package and gated draft-release workflows written; the base hosted run passed tests/build/offline inference but failed its portable hashing step. The .NET hashing fix is included; the updated hosted run is tracked in QA. |
 | Broad real Windows application compatibility | Not Implemented | No universal compatibility claim. Required live Notepad/browser/Office/editor/chat matrix remains open. |
 | Performance engineering targets | Partially Implemented | Event-driven architecture, bounded buffers, reused HTTP client, opt-in AI, released dashboard. Final fresh-background run measured 16.61 MiB working set, 3.61 MiB private, and rounded 0% CPU. No live speech latency claim. |
 
@@ -68,10 +68,24 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Feature | Status | Evidence / limits |
 | --- | --- | --- |
 | Offline Whisper speech | Partially Implemented | Verified Tiny model download and real ~11-second WAV transcription on the CPU (2,751 ms in one run). Base weights are pinned but not accuracy-tested. Live microphone → offline → application acceptance remains open. |
-| Optional local Ollama editing | Partially Implemented | Loopback-only client, local metadata check, cloud-model rejection, cancellation and response checks implemented. An actual downloaded Ollama model was not available for end-to-end quality testing. |
+| Optional local Ollama editing | Partially Implemented | Loopback-only client, local metadata check, cloud-model rejection, cancellation and response checks implemented. A downloaded qwen3:0.6b passed three isolated synthetic requests; latency and incomplete formatting are recorded in LOCAL_MODEL.md. Production local-edit acceptance remains open. |
 | Automatic notes/list/paragraph layout | Implemented | Regression tests verify explicit note cues, ordered first/second/third lists, paragraph grouping, protected identifiers, and Literal preservation. English rules only. |
 | One-action paste default and upgrade migration | Implemented | Old preferences migrate to clipboard once without changing custom shortcuts. Actual paste/restoration compatibility remains separately unverified. |
 | Shortcuts: key-up pairing and prefix release | Partially Implemented | Tests cover hands-free/command/paste chord releases, repeated keydown, 100 rapid presses, idle Escape, and plain Space not opening the app. Live hardware/system-reserved chord interactions require user validation. |
 | Hold-to-talk through silence | Implemented | Silence-stop predicate is applied only to hands-free sessions and tested; maximum duration still applies to every session. |
-| Compact resting pill and docking | Partially Implemented | Native bottom/left/right layouts, translucent idle, opaque active, mic/wave, small expansion and reduced-motion handling implemented. Native dimensions, focus, and opacity checks are recorded in QA; mixed-DPI monitors still require manual testing. |
+| Compact resting pill and docking | Partially Implemented | Native bottom/left/right layouts, translucent idle, opaque active, waveform without a mic icon, small expansion and reduced-motion handling implemented. Native dimensions, focus, and opacity checks are recorded in QA; mixed-DPI monitors still require manual testing. |
 | Shortcut recorder and dedicated-key preset | Partially Implemented | Browser tests exercise chord capture and persistence; native shortcuts suspend with a bounded capture timeout. Hardware-reserved combinations remain outside universal control. |
+
+## 0.2.1 refinements
+
+| Feature | Status | Evidence / limits |
+| --- | --- | --- |
+| Stopped microphone preparation | Implemented | Real native worker tested three starts/cancellations: Ready 21/5/4 ms, first frames 21/68/61 ms after preparation. No idle audio reads; an off switch releases preparation. Cold setup and other devices vary. |
+| Smaller smooth-edged pill without mic symbol | Partially Implemented | Native per-pixel rendering, fractional alpha, full active opacity, geometry and nonactivation passed; PNGs inspected. Mixed-DPI/multi-monitor/manual user acceptance remains open. |
+| Natural list introductions and paragraphs within line breaks | Implemented | Reproduced failures now pass with preserved ordinary-prose word sequence. Clear English list cues and punctuation boundaries; no claim of universal semantic understanding. |
+| Repeated words and restart fragments | Implemented | Regression tests cover multiple adjacent function words, I-stutters, comma-separated hesitation and a narrow set of exact repeated restart phrases. Meaningful emphasis and grammatical repeats are preserved. |
+| Ten-minute default and opt-in silence stop | Partially Implemented | Bounds/migration and no-silence-stop tests pass. A 125-second synthetic WAV preserves its final sample. Uninterrupted long live-speech acceptance remains open. |
+| Clipboard completion before restoration delay | Partially Implemented | Dispatch acknowledgement and delayed format/sequence restoration separated; unsupported formats remain refused. Real target insertion/restoration is still blocked by the environment's foreground restriction. |
+| Conservative automatic AI-edit content guard | Partially Implemented | Tests reject major shortening and changed identifiers/numbers; this does not prove preservation of every fact or nuance. Command Mode retains explicit edit authority. |
+| Low reasoning / local context budget | Implemented | Documented GPT-OSS-only request field tested against HTTP fixtures; unrelated models omit it. Local context bounds/truncation refusal tested; real local-model trial uses thinking off. Quality remains separately limited. |
+| Small local-model feasibility trial | Implemented | Downloaded 523 MB model, measured 3–15 s synthetic edits and substantial active working set, stopped the isolated service. Not enabled as an automatic dictation dependency. |

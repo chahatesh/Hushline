@@ -1,0 +1,72 @@
+{
+  "version": "0.2.1",
+  "date": "2026-10-19",
+  "environment": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
+  "automated": {
+    "rustUnitPassed": 49,
+    "rustIgnored": 8,
+    "typescriptPassed": 5,
+    "browserUiPassed": 9,
+    "formatAndClippy": "passed"
+  },
+  "preparedMicrophone": {
+    "readyMs": [
+      21,
+      5,
+      4
+    ],
+    "firstFrameMs": [
+      21,
+      68,
+      61
+    ],
+    "scope": "Three actual prepared default-device starts and cancellations in debug; excludes initial preparation and upload",
+    "coldPreparationObservationMs": 1179,
+    "idleAudioRead": false
+  },
+  "groq": {
+    "status": "passed",
+    "model": "whisper-large-v3-turbo",
+    "language": "en",
+    "fixture": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.2/samples/jfk.wav",
+    "fixtureSha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "audioSeconds": 11,
+    "wallMs": 2542,
+    "returnedWords": 22,
+    "scope": "One real saved-key public fixture, cold HTTP client. Includes DNS/TLS/upload/inference/parsing; excludes microphone setup, speech time, formatting and insertion. Key never printed."
+  },
+  "nativeOverlay": {
+    "status": "passed",
+    "checks": [
+      "nonactivation",
+      "per-pixel alpha accepted by Windows",
+      "active opacity 255",
+      "136x30 bottom active",
+      "30x112 side active",
+      "16x48 side resting",
+      "hidden idle",
+      "fractional edge coverage and premultiplication"
+    ],
+    "screenshots": [
+      "docs/screenshots/native-bar-bottom.png",
+      "docs/screenshots/native-bar-side.png"
+    ]
+  },
+  "longAudio": {
+    "status": "passed: synthetic encoding regression",
+    "seconds": 125,
+    "tailSamplePreserved": true,
+    "realLongMicrophoneAcceptance": "unverified"
+  },
+  "nativePaste": {
+    "status": "unverified",
+    "reason": "The owned control could not acquire Windows foreground focus; test stopped before dispatch. No restriction bypassed."
+  },
+  "remaining": [
+    "Live microphone-to-application acceptance",
+    "Clipboard restoration after real insertion",
+    "Mixed-DPI/multi-monitor behavior",
+    "General AI meaning preservation and production local-edit acceptance",
+    "Independent clean-machine installation acceptance"
+  ]
+}

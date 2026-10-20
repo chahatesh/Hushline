@@ -30,3 +30,9 @@ Raw WAV is piped to the speech engine through standard input. It is never saved 
 The speech model is loaded by a hidden child process only while transcribing; it is not resident while Hushline rests. Cancellation kills and reaps that process. CPU-only inference can be slower than Groq, particularly for long recordings and larger models. The model-size labels describe downloads, not maximum RAM use. See [measured results](PERFORMANCE.md); there is no blanket speed or accuracy guarantee.
 
 Upstream: [whisper.cpp](https://github.com/ggml-org/whisper.cpp/tree/v1.9.2), [model repository](https://huggingface.co/ggerganov/whisper.cpp), [Whisper](https://github.com/openai/whisper). Those projects, weights, and trademarks retain their own ownership and licenses.
+
+## Small models and long edits
+
+A real qwen3:0.6b trial is documented in [LOCAL_MODEL.md](LOCAL_MODEL.md). A small download still needs substantial active memory and can take seconds to load/edit; it is not an instant, negligible-RAM replacement for local formatting. The benchmark model was isolated from the normal Ollama profile and is not bundled or selected automatically.
+
+The editing client disables optional thinking, reserves explicit input/output context, and refuses text that exceeds a safe local budget instead of allowing silent prompt truncation. Automatic cleanup also checks for missing identifiers, changed numeric content and severe shortening before accepting a rewrite. Those checks are conservative and do not prove semantic accuracy. Every Command Mode edit still needs its preview/selection safeguards.
