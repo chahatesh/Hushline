@@ -1,6 +1,6 @@
-# Hushline architecture
+# Hush architecture
 
-Hushline targets Windows 10/11 x64. Rust owns recording, credentials, storage, inference, safety checks, and input. SolidJS renders a local Tauri 2 WebView2 dashboard on demand. A separate nonactivating Win32/GDI window paints the small overlay without a browser renderer. Background startup creates no webviews. Closing the dashboard releases it while the app remains in the system tray; Quit terminates the process. The dashboard is not needed to complete dictation. The native overlay owns no API key, transcript, or selected text. It receives only phase, status message, activity level, and elapsed seconds.
+Hush targets Windows 10/11 x64. Rust owns recording, credentials, storage, inference, safety checks, and input. SolidJS renders a local Tauri 2 WebView2 dashboard on demand. A separate nonactivating Win32/GDI window paints the small overlay without a browser renderer. Background startup creates no webviews. Closing the dashboard releases it while the app remains in the system tray; Quit terminates the process. The dashboard is not needed to complete dictation. The native overlay owns no API key, transcript, or selected text. It receives only phase, status message, activity level, and elapsed seconds.
 
 ## Critical path
 
@@ -68,3 +68,12 @@ The GDI overlay has an idle resting pill and bottom/left/right geometry. Only ac
 The native bar is a 48×16 logical-pixel resting capsule (16×48 at the side), expanding to 136×30 at the bottom or 30×112 at the side. No microphone icon is drawn. A signed-distance coverage rasterizer supplies premultiplied per-pixel alpha to UpdateLayeredWindow, preserving antialiased outer pixels that a binary window region clipped. The waveform, cancel target and accessible window title remain; no idle rendering timer was added.
 
 Local formatting handles natural list introductions and repeated restart fragments, and processes long prose within explicit line breaks rather than bypassing the whole transcript. Automatic AI cleanup rejects missing identifiers/numbers or substantial shortening; this is a conservative guard, not semantic proof. Command Mode retains its explicit authority to shorten selected text. GPT-OSS editing requests use Groq's documented low reasoning effort; unrelated configurable models are not sent that field. Local Ollama edits disable thinking and reserve an explicit context/output budget, rejecting oversized inputs instead of relying on a truncating default. Models still unload after editing. See the small-model trial in docs/LOCAL_MODEL.md.
+## 0.3.0 polishing and error presentation
+
+Settings schema 4 adds `polishPolicy` (`always`, `sometimes`, `never`). Legacy `enhanced`/Polished opt-ins migrate to Always; other saved profiles remain Never. Never overrides automatic per-app AI requests. Literal mode and exact snippet expansion keep their explicit contracts, and Command Mode remains separate. Sometimes uses deterministic length/cue/style checks; it does not call a model to decide whether to call a model. Groq remains the only cloud provider. Offline speech routes optional editing only to the local Ollama service.
+
+Automatic AI edits retain the existing content/identifier/number guard and local fallback. The actor receives a generation-tagged formatting status so cancelled or superseded work cannot update the current overlay. Local postprocessing handles clear list structures, paragraphs and terminal fragment punctuation without adding sentence dots unconditionally.
+
+The native overlay extends its transparent surface upward for a measured, wrapped error/recovery card. The pill retains its own geometry and cancel hit area. The card participates in per-pixel alpha rendering, respects the monitor work area and uses `WS_EX_NOACTIVATE`; it owns no transcript or key. It introduces no idle timer or separate browser renderer.
+
+The visible product name is Hush. Stable internal names (`io.chahatesh.hushline`, `hushline.sqlite`, `Hushline/Groq`, autostart `Hushline`, `hushline.exe`) intentionally remain unchanged for upgrades.

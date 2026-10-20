@@ -2,16 +2,16 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $workspaceRoot = [IO.Path]::GetFullPath($projectRoot)
-$target = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts\installer-smoke-0.2.1'))
+$target = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts\installer-smoke-0.3.0'))
 if (-not $target.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar)) { throw 'Installer target must be inside this workspace.' }
 if (Test-Path -LiteralPath $target) { throw 'Test directory already exists; refusing to replace it.' }
 if (Get-Process hushline -ErrorAction SilentlyContinue) { throw 'Quit Hushline before the installer test.' }
 foreach ($registryRoot in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall')) {
-  $existing = Get-ChildItem $registryRoot -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Hushline' }
+  $existing = Get-ChildItem $registryRoot -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -in @('Hush','Hushline') }
   if ($existing) { throw 'An existing Hushline installation was found; refusing to change it.' }
 }
 if ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name Hushline -ErrorAction SilentlyContinue)) { throw 'An existing Hushline startup entry was found; refusing to change it.' }
-$installer = Join-Path $projectRoot 'src-tauri\target\release\bundle\nsis\Hushline_0.2.1_x64-setup.exe'
+$installer = Join-Path $projectRoot 'src-tauri\target\release\bundle\nsis\Hush_0.3.0_x64-setup.exe'
 $install = Start-Process -FilePath $installer -ArgumentList '/S',"/D=$target" -WindowStyle Hidden -Wait -PassThru
 if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)." }
 $executable = Join-Path $target 'hushline.exe'
@@ -27,7 +27,7 @@ $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyl
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while ((Test-Path -LiteralPath $executable) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
 if (Test-Path -LiteralPath $executable) { throw 'Uninstaller left the executable behind.' }
-if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Hushline') { throw 'Uninstaller left its registry entry behind.' }
+if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Hush') { throw 'Uninstaller left its registry entry behind.' }
 $result = [pscustomobject]@{ installed=$true; launchedBackground=$true; dependencyLicensesPresent=$true; uninstalled=$true; profileRetained=(Test-Path (Join-Path $env:APPDATA 'io.chahatesh.hushline\hushline.sqlite')); target=$target; interactiveWizard='not tested'; liveDictation='not tested' }
 $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $projectRoot 'artifacts\installer-test.json')
 $result

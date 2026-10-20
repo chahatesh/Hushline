@@ -33,6 +33,7 @@ struct Bridge {
 struct OverlayView {
     phase: String,
     message: String,
+    warning: String,
     level: f32,
     seconds: f32,
     dock: String,
@@ -49,7 +50,9 @@ struct Painter {
     animated: bool,
     alpha: Cell<u8>,
     paint_ok: Cell<bool>,
-    layout: Cell<(bool, u8)>,
+    layout: Cell<(bool, u8, u64)>,
+    pill: Cell<RECT>,
+    notice: Cell<RECT>,
     from: Cell<RECT>,
     to: Cell<RECT>,
     fade_from: Cell<u8>,
@@ -84,7 +87,7 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
         let class = WNDCLASSW {
             lpfnWndProc: Some(procedure),
             hInstance: instance,
-            lpszClassName: w!("HushlineNativeOverlay"),
+            lpszClassName: w!("HushNativeOverlay"),
             ..Default::default()
         };
         if RegisterClassW(&class) == 0 {
@@ -109,7 +112,9 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             animated: animations.as_bool(),
             alpha: Cell::new(165),
             paint_ok: Cell::new(false),
-            layout: Cell::new((false, 255)),
+            layout: Cell::new((false, 255, 0)),
+            pill: Cell::new(RECT::default()),
+            notice: Cell::new(RECT::default()),
             from: Cell::new(RECT::default()),
             to: Cell::new(RECT::default()),
             fade_from: Cell::new(165),
@@ -120,8 +125,8 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
         let pointer = Rc::into_raw(painter);
         match CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
-            w!("HushlineNativeOverlay"),
-            w!("Hushline dictation"),
+            w!("HushNativeOverlay"),
+            w!("Hush dictation"),
             WS_POPUP,
             0,
             0,
@@ -165,6 +170,7 @@ pub fn update(view: &View) {
             *v = OverlayView {
                 phase: view.phase.clone(),
                 message: view.message.clone(),
+                warning: view.warning.clone(),
                 level: view.level,
                 seconds: view.seconds,
                 dock: v.dock.clone(),
@@ -209,7 +215,7 @@ unsafe fn fonts(hwnd: HWND, p: &Painter) {
             w!("Segoe UI"),
         )
     };
-    p.font.set(make(12));
+    p.font.set(make(13));
     p.small.set(make(9));
 }
 pub fn configure(settings: &Settings) {
@@ -244,6 +250,52 @@ fn dimensions(active: bool, side: bool) -> (f64, f64) {
         (true, true) => (30.0, 112.0),
     }
 }
+fn notice_text(view: &OverlayView) -> String {
+    if view.phase == "idle" || view.phase == "listening" || view.phase == "processing" {
+        return String::new();
+    }
+    let message = if view.phase == "error" {
+        view.message.as_str()
+    } else {
+        ""
+    };
+    [message, view.warning.as_str()]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .chars()
+        .take(1200)
+        .collect()
+}
+fn notice_id(view: &OverlayView) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    notice_text(view).hash(&mut hash);
+    hash.finish()
+}
+unsafe fn notice_height(hwnd: HWND, p: &Painter, value: &str, width: i32) -> i32 {
+    if value.is_empty() {
+        return 0;
+    }
+    let dc = GetDC(Some(hwnd));
+    let old = SelectObject(dc, HGDIOBJ(p.font.get().0));
+    let mut text: Vec<u16> = value.encode_utf16().collect();
+    let scale = p.dpi.get() as f64 / 96.0;
+    let mut rect = RECT {
+        right: width - (28.0 * scale) as i32,
+        ..RECT::default()
+    };
+    DrawTextW(
+        dc,
+        &mut text,
+        &mut rect,
+        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+    );
+    let _ = SelectObject(dc, old);
+    ReleaseDC(Some(hwnd), dc);
+    (rect.bottom + (28.0 * scale) as i32).clamp((60.0 * scale) as i32, (280.0 * scale) as i32)
+}
 unsafe fn geometry(hwnd: HWND, _p: &Painter, rect: RECT) {
     let _ = SetWindowPos(
         hwnd,
@@ -262,7 +314,7 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     if !active && dock == 3 {
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = KillTimer(Some(hwnd), 2);
-        p.layout.set((active, dock));
+        p.layout.set((active, dock, notice_id(&view)));
         return;
     }
     let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
@@ -293,12 +345,55 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
             info.rcWork.bottom - height - gap,
         ),
     };
-    let rect = RECT {
+    let mut rect = RECT {
         left: x,
         top: y,
         right: x + width,
         bottom: y + height,
     };
+    let notice = notice_text(&view);
+    let card_width = ((340.0 * scale) as i32).min(info.rcWork.right - info.rcWork.left - 20);
+    let card_height = notice_height(hwnd, p, &notice, card_width);
+    if card_height > 0 {
+        let full_width = width.max(card_width);
+        let full_height = height + card_height + (8.0 * scale) as i32;
+        rect.left = match dock {
+            1 => x,
+            2 => x + width - full_width,
+            _ => x + (width - full_width) / 2,
+        };
+        rect.left = rect
+            .left
+            .clamp(info.rcWork.left, info.rcWork.right - full_width);
+        rect.top = (y + height - full_height).max(info.rcWork.top);
+        rect.right = rect.left + full_width;
+        rect.bottom = rect.top + full_height;
+        let pill_x = match dock {
+            1 => 0,
+            2 => full_width - width,
+            _ => (full_width - width) / 2,
+        };
+        p.pill.set(RECT {
+            left: pill_x,
+            top: full_height - height,
+            right: pill_x + width,
+            bottom: full_height,
+        });
+        p.notice.set(RECT {
+            left: 0,
+            top: 0,
+            right: full_width,
+            bottom: card_height,
+        });
+    } else {
+        p.pill.set(RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        });
+        p.notice.set(RECT::default());
+    }
     let alpha = if active { 255 } else { 165 };
     let mut from = RECT::default();
     let _ = GetWindowRect(hwnd, &mut from);
@@ -308,8 +403,9 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     p.fade_from.set(p.alpha.get());
     p.fade_to.set(alpha);
     // Mark the layout before SetWindowPos can synchronously reenter for DPI changes.
-    p.layout.set((active, dock));
-    if animate && visible && p.animated {
+    let previous_notice = p.layout.get().2;
+    p.layout.set((active, dock, notice_id(&view)));
+    if animate && visible && p.animated && previous_notice == notice_id(&view) && card_height == 0 {
         p.transition.set(Some(Instant::now()));
         SetTimer(Some(hwnd), 2, 16, None);
     } else {
@@ -336,6 +432,20 @@ unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) 
         &mut rect,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
+    let _ = SelectObject(hdc, previous);
+}
+unsafe fn wrapped_text(hdc: HDC, value: &str, mut rect: RECT, font: HFONT) {
+    let previous = SelectObject(hdc, HGDIOBJ(font.0));
+    let _ = SetTextColor(hdc, rgb(255, 255, 255));
+    let mut text: Vec<u16> = value.encode_utf16().collect();
+    if !text.is_empty() {
+        DrawTextW(
+            hdc,
+            &mut text,
+            &mut rect,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS,
+        );
+    }
     let _ = SelectObject(hdc, previous);
 }
 // Signed distance to a rounded box gives fractional edge coverage at every DPI.
@@ -367,16 +477,20 @@ fn rounded(
     rect: (f64, f64, f64, f64),
     color: COLORREF,
 ) {
+    rounded_radius(pixels, width, height, rect, color, rect.2.min(rect.3) / 2.0);
+}
+fn rounded_radius(
+    pixels: &mut [u32],
+    width: i32,
+    height: i32,
+    rect: (f64, f64, f64, f64),
+    color: COLORREF,
+    radius: f64,
+) {
     let (left, top, w, h) = rect;
     for y in (top.floor() as i32 - 1).max(0)..((top + h).ceil() as i32 + 1).min(height) {
         for x in (left.floor() as i32 - 1).max(0)..((left + w).ceil() as i32 + 1).min(width) {
-            let alpha = coverage(
-                x as f64 + 0.5 - left,
-                y as f64 + 0.5 - top,
-                w,
-                h,
-                w.min(h) / 2.0,
-            );
+            let alpha = coverage(x as f64 + 0.5 - left, y as f64 + 0.5 - top, w, h, radius);
             composite(&mut pixels[(y * width + x) as usize], color, alpha);
         }
     }
@@ -413,7 +527,16 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     let memory = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
     memory.fill(0);
     let scale = p.dpi.get() as f64 / 96.0;
-    let (w, h) = (width as f64 / scale, height as f64 / scale);
+    let pill = p.pill.get();
+    let (ox, oy) = (pill.left as f64 / scale, pill.top as f64 / scale);
+    let (w, h) = if p.notice.get().bottom > 0 {
+        (
+            (pill.right - pill.left) as f64 / scale,
+            (pill.bottom - pill.top) as f64 / scale,
+        )
+    } else {
+        (width as f64 / scale, height as f64 / scale)
+    };
     let light = view.theme == "light";
     let background = if view.phase == "error" {
         rgb(84, 40, 45)
@@ -439,7 +562,12 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         &mut pixels,
         width,
         height,
-        (0.5, 0.5, width as f64 - 1.0, height as f64 - 1.0),
+        (
+            ox * scale + 0.5,
+            oy * scale + 0.5,
+            w * scale - 1.0,
+            h * scale - 1.0,
+        ),
         background,
     );
     let mut shape = |x: f64, y: f64, w: f64, h: f64, color| {
@@ -447,7 +575,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             &mut pixels,
             width,
             height,
-            (x * scale, y * scale, w * scale, h * scale),
+            ((x + ox) * scale, (y + oy) * scale, w * scale, h * scale),
             color,
         )
     };
@@ -515,10 +643,10 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
                 dc,
                 &label,
                 RECT {
-                    left: (70.0 * scale) as i32,
-                    top: 0,
-                    right: ((w - 29.0) * scale) as i32,
-                    bottom: height,
+                    left: ((ox + 70.0) * scale) as i32,
+                    top: (oy * scale) as i32,
+                    right: ((ox + w - 29.0) * scale) as i32,
+                    bottom: ((oy + h) * scale) as i32,
                 },
                 p.small.get(),
                 rgb(255, 255, 255),
@@ -528,6 +656,47 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
                 composite(pixel, ink, (mask & 255) as f64 / 255.0);
             }
+        }
+    }
+    let card = p.notice.get();
+    if card.bottom > 0 {
+        rounded_radius(
+            &mut pixels,
+            width,
+            height,
+            (0.5, 0.5, card.right as f64 - 1.0, card.bottom as f64 - 1.0),
+            if light {
+                rgb(250, 250, 252)
+            } else {
+                rgb(32, 36, 44)
+            },
+            14.0 * scale,
+        );
+        memory.fill(0);
+        let padding = (14.0 * scale) as i32;
+        let _ = SetBkMode(dc, TRANSPARENT);
+        wrapped_text(
+            dc,
+            &notice_text(&view),
+            RECT {
+                left: padding,
+                top: padding,
+                right: card.right - padding,
+                bottom: card.bottom - padding,
+            },
+            p.font.get(),
+        );
+        let _ = GdiFlush();
+        for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
+            composite(
+                pixel,
+                if light {
+                    rgb(42, 47, 58)
+                } else {
+                    rgb(240, 242, 247)
+                },
+                (mask & 255) as f64 / 255.0,
+            );
         }
     }
     memory.copy_from_slice(&pixels);
@@ -603,7 +772,7 @@ unsafe extern "system" fn procedure(
             let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
             let active = view.phase != "idle" && !view.phase.is_empty();
             let dock = dock_id(&view.dock);
-            if p.layout.get() != (active, dock) {
+            if p.layout.get() != (active, dock, notice_id(&view)) {
                 // Snap between docks/monitors; only the small activation lift animates.
                 let same_dock = p.layout.get().1 == dock;
                 let same_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
@@ -616,7 +785,7 @@ unsafe extern "system" fn procedure(
                 let _ = KillTimer(Some(hwnd), 1);
             }
             let title: Vec<u16> = format!(
-                "Hushline · {}",
+                "Hush · {}",
                 if active {
                     view.message.as_str()
                 } else {
@@ -674,15 +843,18 @@ unsafe extern "system" fn procedure(
             let y = (lparam.0 >> 16) as u16 as i32;
             let side = matches!(dock_id(&view.dock), 1 | 2);
             let scale = p.dpi.get() as f64 / 96.0;
-            let cancel = view.phase != "idle"
+            let pill = p.pill.get();
+            let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
+            let cancel = in_pill
+                && view.phase != "idle"
                 && if side {
                     y >= client.bottom - (30.0 * scale) as i32
                 } else {
-                    x >= client.right - (28.0 * scale) as i32
+                    x >= pill.right - (28.0 * scale) as i32
                 };
             let action = if cancel {
                 Action::Cancel
-            } else if view.phase == "error" || view.phase == "preview" {
+            } else if !in_pill || view.phase == "error" || view.phase == "preview" {
                 Action::Open
             } else {
                 Action::HandsFree
@@ -720,6 +892,23 @@ mod tests {
         composite(&mut pixel, rgb(255, 100, 40), alpha);
         assert_eq!((pixel >> 16) & 255, pixel >> 24);
         assert!((pixel & 255) < pixel >> 24);
+    }
+    #[test]
+    fn notices_include_the_reason_and_recovery_warning_but_not_old_session_text() {
+        let mut v = OverlayView {
+            phase: "error".into(),
+            message: "Microphone unavailable".into(),
+            warning: "Choose another device in Settings".into(),
+            ..OverlayView::default()
+        };
+        assert_eq!(
+            notice_text(&v),
+            "Microphone unavailable\n\nChoose another device in Settings"
+        );
+        v.phase = "listening".into();
+        assert!(notice_text(&v).is_empty());
+        v.phase = "success".into();
+        assert_eq!(notice_text(&v), "Choose another device in Settings");
     }
     #[test]
     #[ignore = "Shows the real native overlay briefly; requires a Windows desktop without concurrent focus changes."]
@@ -784,6 +973,33 @@ mod tests {
         }
         assert_eq!(bounds.right - bounds.left, (30.0 * scale) as i32);
         assert_eq!(bounds.bottom - bounds.top, (112.0 * scale) as i32);
+        // The real wrapped error surface must remain nonactivating at every dock.
+        for dock in ["bottom", "left", "right"] {
+            configure(&Settings {
+                dock: dock.into(),
+                ..Settings::default()
+            });
+            update(&View { phase:"error".into(),
+                message:"Your microphone is unavailable. Reconnect it or choose another microphone in Settings.".into(),
+                warning:"Click this message to open Hush. Your clipboard has not changed.".into(),
+                ..View::default() });
+            std::thread::sleep(Duration::from_millis(220));
+            unsafe {
+                GetWindowRect(hwnd, &mut bounds).unwrap();
+            }
+            assert!(bounds.right - bounds.left >= (330.0 * scale) as i32);
+            assert!(bounds.bottom - bounds.top > (90.0 * scale) as i32);
+            assert_eq!(unsafe { GetForegroundWindow() }, before);
+            let painted = unsafe {
+                SendMessageW(hwnd, WM_PAINT, None, None);
+                SendMessageW(hwnd, QUERY_PAINT, None, None).0
+            };
+            assert_ne!(painted & 256, 0, "Error card failed to paint");
+        }
+        configure(&Settings {
+            dock: "left".into(),
+            ..Settings::default()
+        });
         update(&View {
             phase: "idle".into(),
             ..View::default()

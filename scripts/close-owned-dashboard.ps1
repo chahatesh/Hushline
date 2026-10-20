@@ -20,7 +20,7 @@ public static class HushlineSmokeWindow {
       uint owner; GetWindowThreadProcessId(window, out owner);
       if(owner != (uint)process || !IsWindowVisible(window)) return true;
       var text=new StringBuilder(512); GetWindowText(window,text,text.Capacity);
-      if(text.ToString()=="Hushline") { found=window; return false; }
+      if(text.ToString()=="Hush") { found=window; return false; }
       return true;
     },IntPtr.Zero);
     return found;

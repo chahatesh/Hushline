@@ -44,15 +44,20 @@ try {
     report.checks.nativeCredentialUIRoundtrip=true;
   }else report.checks.nativeCredentialUIRoundtrip='skipped: existing key preserved';
   const baselineHistory=(await native(main,'snapshot')).history.length;
+  report.checks.microphoneTestStage='starting';
   await main.getByRole('button',{name:'Test',exact:true}).click();
-  await waitFor(async()=>(await native(main,'snapshot')).view.phase==='listening');
+  const initialMic=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return ['listening','error'].includes(view.phase)?view:false;});
+  assert.equal(initialMic.phase,'listening',`Microphone first-use error: ${initialMic.message}`);
+  report.checks.microphoneTestStage='cancelling';
   await native(main,'action',{name:'cancel'});await waitFor(async()=>(await native(main,'snapshot')).view.phase==='idle');
   assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
   report.checks.nativeMicrophoneTestCancel=true;
   // Exercise normal Stop and its final-frame drain through real IPC, still in
   // microphone-test mode: neither success nor silence rejection uploads audio.
   await native(main,'action',{name:'test'});
-  await waitFor(async()=>(await native(main,'snapshot')).view.seconds>=0.35);
+  report.checks.microphoneTestStage='waiting for frames';
+  const frames=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return view.phase==='error'||view.seconds>=0.35?view:false;});
+  assert.notEqual(frames.phase,'error',`Microphone frame error: ${frames.message}`);
   await native(main,'action',{name:'test'});
   const stopped=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return view.phase!=='listening'?view:false;});
   assert(stopped.phase==='success'||stopped.message.includes("couldn't hear any speech"),`Microphone Stop failed: ${stopped.message}`);

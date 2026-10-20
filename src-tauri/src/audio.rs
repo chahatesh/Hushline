@@ -131,7 +131,7 @@ impl Engine {
         };
         if self.tx.send(Request::Start(request)).is_err() {
             let _ = events.send(Event::Finished(Err(
-                "Microphone worker is unavailable. Restart Hushline.".into(),
+                "Microphone worker is unavailable. Restart Hush.".into(),
             )));
         }
         Capture {
@@ -453,6 +453,39 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Tests cold first use and normal microphone Stop locally; no upload or saved audio."]
+    fn cold_first_use_and_normal_stop() {
+        let settings = Settings::default();
+        let engine = Engine::new(settings.clone());
+        for attempt in 0..4 {
+            let (tx, rx) = mpsc::channel();
+            let capture = engine.start(settings.clone(), tx);
+            let started = Instant::now();
+            let mut stopped = false;
+            loop {
+                match rx.recv_timeout(Duration::from_secs(12)).unwrap() {
+                    Event::Ready => println!(
+                        "Attempt {attempt} Ready {} ms",
+                        started.elapsed().as_millis()
+                    ),
+                    Event::Meter { seconds, .. } if seconds >= 1.0 && !stopped => {
+                        capture.stop();
+                        stopped = true;
+                    }
+                    Event::Finished(result) => {
+                        assert!(stopped, "Ended before Stop: {:?}", result.as_ref().err());
+                        match result {
+                            Ok(audio) => assert!(audio.duration_ms >= 900),
+                            Err(e) => assert!(e.contains("couldn't hear any speech"), "{e}"),
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     #[test]
     fn cancellation_before_capture_never_opens_a_stream() {
         let (events, event_rx) = mpsc::channel();

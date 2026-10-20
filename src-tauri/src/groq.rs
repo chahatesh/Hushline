@@ -428,3 +428,50 @@ mod tests {
         assert!(!http_error(StatusCode::BAD_REQUEST).contains("gsk_"));
     }
 }
+#[cfg(test)]
+#[tokio::test]
+#[ignore = "Uses the saved Groq key for synthetic text only; incurs normal Groq usage."]
+async fn live_cloud_polish_policies() {
+    use crate::{
+        model::{Mode, PolishPolicy},
+        text,
+    };
+    let key = crate::native::read_key().expect("A saved Groq key is needed");
+    let groq = Groq::new().unwrap();
+    let input = "We reviewed the release today and the build passed. First, review the draft. Second, test the installer. Third, email Maya. Separately, the deadline remains Thursday at 3 pm. Keep version v2.4.1 and useState unchanged. We still need to check the documentation before the release. All of these points should remain in the final text.";
+    let mut requests = 0;
+    for policy in [
+        PolishPolicy::Never,
+        PolishPolicy::Sometimes,
+        PolishPolicy::Always,
+    ] {
+        if !text::should_polish(input, &policy, &Mode::Clean, false) {
+            assert_eq!(policy, PolishPolicy::Never);
+            continue;
+        }
+        let started = Instant::now();
+        let edited = groq
+            .rewrite(
+                &key,
+                "openai/gpt-oss-20b",
+                input,
+                text::POLISH_INSTRUCTION,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        text::validate_cleanup(input, &edited).unwrap();
+        assert!(
+            edited.contains('\n'),
+            "The model did not structure the synthetic list"
+        );
+        assert!(edited.contains("Maya") && edited.contains("Thursday"));
+        assert!(edited.contains("useState") && edited.contains("v2.4.1"));
+        requests += 1;
+        println!(
+            "Synthetic {policy:?} cloud polish: {} ms",
+            started.elapsed().as_millis()
+        );
+    }
+    assert_eq!(requests, 2);
+}

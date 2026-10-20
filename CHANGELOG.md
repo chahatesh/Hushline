@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+- Rename the visible product to Hush while retaining the application identifier, database, credential slot and executable for existing profiles.
+- Show wrapped errors and recovery warnings above the native pill at bottom/left/right docks, without activating the window. Keep notices with recovered transcripts visible longer.
+- Add Always / Sometimes / Never AI polish choices. Never overrides automatic app styles; exact words and snippets remain exact. Offline mode stays local.
+- Improve list introductions within prose and preserve/canonicalize explicit Markdown bullet lines. Keep identifiers and code intact.
+- Remove terminal periods only from clear English fragments; keep sentence punctuation and avoid appending periods unconditionally. Give the AI the same punctuation/paragraph/list rules.
+- Add cold-start/normal-stop microphone checks, native error-surface checks, policy migration tests and real synthetic Groq text-model checks. The reported intermittent first-use error has not been reproduced conclusively.
+
+
 ## 0.2.1 — unreleased
 
 - Remove the microphone drawing from the voice bar, reduce its footprint, and replace clipped window-region corners with smooth per-pixel alpha.

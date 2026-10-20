@@ -89,3 +89,13 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Conservative automatic AI-edit content guard | Partially Implemented | Tests reject major shortening and changed identifiers/numbers; this does not prove preservation of every fact or nuance. Command Mode retains explicit edit authority. |
 | Low reasoning / local context budget | Implemented | Documented GPT-OSS-only request field tested against HTTP fixtures; unrelated models omit it. Local context bounds/truncation refusal tested; real local-model trial uses thinking off. Quality remains separately limited. |
 | Small local-model feasibility trial | Implemented | Downloaded 523 MB model, measured 3–15 s synthetic edits and substantial active working set, stopped the isolated service. Not enabled as an automatic dictation dependency. |
+## 0.3.0 refinements
+
+| Feature | Status | Evidence / limits |
+| --- | --- | --- |
+| Hush product name | Implemented | UI, tray, window, installer and About use Hush. Stable identifier, executable and credential/data names retain upgrade compatibility. |
+| Error and recovery card above the pill | Partially Implemented | Real Win32 rendering/nonactivation passed at bottom/left/right docks. Synthetic native pixels inspected. Mixed-DPI monitor verification remains open. |
+| Always / Sometimes / Never AI polish | Implemented | Policy/migration regression and browser persistence tests pass. Real Groq synthetic requests pass for Always and Sometimes; Never skips the edit call. Literal words and snippets bypass automatic AI editing. |
+| Robust mixed prose/list layout | Partially Implemented | Tests cover English introductions, prose before an enumerated list and existing Markdown bullets. Ambiguous topic/list structure relies on optional AI; no universal semantic-accuracy claim. |
+| Sentence-aware terminal periods | Partially Implemented | Clear English fragments lose a terminal dot; recognized complete sentences/identifiers/literal text retain punctuation. Unknown local constructions retain their punctuation. AI is instructed to handle other fragments. |
+| Reported intermittent red first-use state | Partially Implemented | Cold first-start plus four normal-stop captures passed, and the configured mic completed the packaged test. The user's exact intermittent failure was not reproduced conclusively. Error details are now visible instead of only a red symbol. |

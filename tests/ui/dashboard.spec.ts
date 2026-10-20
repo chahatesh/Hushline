@@ -96,3 +96,25 @@ test('fast microphone preparation and pause behavior are explicit preferences', 
   await page.getByRole('tab', { name: 'Dictation', exact: true }).click();
   await expect(page.getByLabel('Wait this many seconds', { exact: true })).toHaveValue('15');
 });
+
+test('Hush branding and cloud polish policy persist without ambiguity', async ({page}) => {
+  await expect(page.locator('.brand').first()).toContainText('hush');
+  await expect(page.locator('.brand').first()).not.toContainText('hushline');
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('tab',{name:'Dictation',exact:true}).click();
+  const choices=page.getByRole('group',{name:'AI polish frequency'});
+  await expect(choices.getByRole('button',{name:/Never/})).toHaveAttribute('aria-pressed','true');
+  await choices.getByRole('button',{name:/Always/}).click();
+  await page.getByRole('button',{name:'Save settings',exact:true}).click();
+  await page.reload();
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('tab',{name:'Dictation',exact:true}).click();
+  await expect(choices.getByRole('button',{name:/Always/})).toHaveAttribute('aria-pressed','true');
+  await choices.getByRole('button',{name:/Sometimes/}).click();
+  await page.getByLabel('Clean up my speech',{exact:true}).selectOption('literal');
+  await expect(choices.getByRole('button',{name:/Always/})).toBeDisabled();
+  await expect(page.getByText('AI polish is paused while “Keep my exact words” is selected.')).toBeVisible();
+  await page.getByLabel('Clean up my speech',{exact:true}).selectOption('clean');
+  await expect(choices.getByRole('button',{name:/Sometimes/})).toHaveAttribute('aria-pressed','true');
+  await page.locator('.polish-choice').screenshot({path:'docs/screenshots/cloud-polish.png',animations:'disabled'});
+});

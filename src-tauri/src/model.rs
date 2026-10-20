@@ -10,6 +10,15 @@ pub enum Mode {
     Polished,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PolishPolicy {
+    Always,
+    Sometimes,
+    #[default]
+    Never,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -28,6 +37,7 @@ pub struct Settings {
     pub language: String,
     pub mode: Mode,
     pub enhanced: bool,
+    pub polish_policy: PolishPolicy,
     pub history_enabled: bool,
     pub context_enabled: bool,
     pub selection_permission: bool,
@@ -43,7 +53,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            preferences_version: 3,
+            preferences_version: 4,
             provider: "groq".into(),
             offline_model: "tiny".into(),
             local_text_model: String::new(),
@@ -57,6 +67,7 @@ impl Default for Settings {
             language: String::new(),
             mode: Mode::Clean,
             enhanced: false,
+            polish_policy: PolishPolicy::Never,
             history_enabled: true,
             context_enabled: false,
             selection_permission: false,
@@ -73,20 +84,23 @@ impl Default for Settings {
 
 impl Settings {
     pub fn migrate(&mut self) -> bool {
-        if self.preferences_version >= 3 {
+        if self.preferences_version >= 4 {
             return false;
         }
         // v0.1 shipped character injection as the default. Prefer one paste on upgrade.
         if self.preferences_version < 2 {
             self.insertion = "clipboard".into();
         }
-        if self.max_seconds == 120 {
+        if self.preferences_version < 3 && self.max_seconds == 120 {
             self.max_seconds = 600;
         }
-        if self.silence_seconds == 8 {
+        if self.preferences_version < 3 && self.silence_seconds == 8 {
             self.silence_seconds = 0;
         }
-        self.preferences_version = 3;
+        if self.enhanced || self.mode == Mode::Polished {
+            self.polish_policy = PolishPolicy::Always;
+        }
+        self.preferences_version = 4;
         true
     }
     pub fn validate(&self) -> Result<(), String> {
@@ -243,6 +257,33 @@ pub struct Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn polish_upgrade_preserves_opt_in_and_does_not_rewrite_v3_limits() {
+        for (old, expected) in [
+            (
+                r#"{"preferencesVersion":3,"enhanced":true}"#,
+                PolishPolicy::Always,
+            ),
+            (
+                r#"{"preferencesVersion":3,"enhanced":false}"#,
+                PolishPolicy::Never,
+            ),
+            (
+                r#"{"preferencesVersion":3,"mode":"polished"}"#,
+                PolishPolicy::Always,
+            ),
+        ] {
+            let mut settings: Settings = serde_json::from_str(old).unwrap();
+            settings.max_seconds = 120;
+            settings.silence_seconds = 8;
+            assert!(settings.migrate());
+            assert_eq!(settings.polish_policy, expected);
+            assert_eq!(settings.max_seconds, 120);
+            assert_eq!(settings.silence_seconds, 8);
+            assert!(!settings.migrate());
+        }
+        assert!(serde_json::from_str::<Settings>(r#"{"polishPolicy":"invalid"}"#).is_err());
+    }
     #[test]
     fn validates_bounds_and_rejects_nan() {
         let mut s = Settings::default();

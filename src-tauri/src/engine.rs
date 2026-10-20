@@ -42,6 +42,7 @@ enum Message {
     Apply,
     Hide(u64),
     ClipboardWarning(String),
+    Polishing(u64),
 }
 struct Session {
     id: u64,
@@ -269,17 +270,23 @@ async fn process(
         } else {
             None
         };
-        if session.settings.mode != Mode::Literal
-            && (session.settings.enhanced
-                || session.settings.mode == Mode::Polished
-                || style.is_some_and(|s| s.enhanced))
-        {
-            let instruction=style.map(|s|s.instruction.as_str()).unwrap_or("Turn this speech into clear, natural, professional prose. Remove stutters, accidental repeated fragments and empty hesitations. Use blank lines for readable paragraphs and • bullets for clear lists. Do not summarize or omit substantive statements. Preserve meaning, names, facts, dates, times, numbers, URLs and technical identifiers.");
+        if text::should_polish(
+            &output,
+            &session.settings.polish_policy,
+            &session.settings.mode,
+            style.is_some_and(|s| s.enhanced),
+        ) {
+            let _ = state.tx.send(Message::Polishing(session.id));
+            let instruction = format!(
+                "{} {}",
+                text::POLISH_INSTRUCTION,
+                style.map(|s| s.instruction.as_str()).unwrap_or("")
+            );
             match rewrite(
                 &state,
                 &session.settings,
                 &output,
-                instruction,
+                &instruction,
                 false,
                 &cancel,
             )
@@ -308,6 +315,7 @@ async fn process(
             }
         }
         output = text::format(&output, &session.settings.formatting, &local_mode);
+        output = text::sentence_endings(&output, &local_mode);
     }
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
@@ -416,7 +424,12 @@ fn finish_completed(
     if done.preview {
         show(app, Some("Home"));
     } else {
-        schedule_hide(state.tx.clone(), id, if inserted { 1300 } else { 8000 });
+        let has_notice = !state.view.lock().unwrap().warning.is_empty();
+        schedule_hide(
+            state.tx.clone(),
+            id,
+            if !inserted || has_notice { 12000 } else { 1300 },
+        );
     }
     pending
 }
@@ -433,6 +446,11 @@ async fn actor(
     let mut last_tap: Option<Instant> = None;
     while let Some(message) = rx.recv().await {
         match message {
+            Message::Polishing(id) => {
+                if id == generation && !cancellation.is_cancelled() {
+                    publish(&app, &state, |v| v.message = "Formatting your words".into());
+                }
+            }
             Message::Action(Action::Open) => {
                 if let Some(s) = session.as_mut() {
                     s.cancelled = true;
@@ -1063,6 +1081,8 @@ pub fn run() {
         }))
         .plugin(
             tauri_plugin_autostart::Builder::new()
+                // Keep the existing Windows startup entry across the product rename.
+                .app_name("Hushline")
                 .args(["--background"])
                 .build(),
         );
@@ -1157,7 +1177,7 @@ pub fn run() {
             native::configure_overlay(&settings);
             native::update_overlay(&state.view.lock().unwrap());
             let open =
-                tauri::menu::MenuItem::with_id(app, "open", "Open Hushline", true, None::<&str>)?;
+                tauri::menu::MenuItem::with_id(app, "open", "Open Hush", true, None::<&str>)?;
             let cancel = tauri::menu::MenuItem::with_id(
                 app,
                 "cancel",
@@ -1166,10 +1186,10 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit =
-                tauri::menu::MenuItem::with_id(app, "quit", "Quit Hushline", true, None::<&str>)?;
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit Hush", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&open, &cancel, &quit])?;
             tauri::tray::TrayIconBuilder::new()
-                .tooltip("Hushline · Ctrl + Win to dictate")
+                .tooltip("Hush · Ctrl + Win to dictate")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1202,7 +1222,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Hushline could not start");
+        .expect("Hush could not start");
     application.run(|_, event| {
         if let tauri::RunEvent::ExitRequested {
             code: None, api, ..
