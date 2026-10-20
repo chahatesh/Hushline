@@ -94,6 +94,7 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Feature | Status | Evidence / limits |
 | --- | --- | --- |
 | Hush product name | Implemented | UI, tray, window, installer and About use Hush. Stable identifier, executable and credential/data names retain upgrade compatibility. |
+| Installer coexistence with an older Hush app | Implemented | A unique bundle-ID registration and Hush Dictation shortcuts passed real silent install/uninstall while retaining the pre-existing Hush registration and shortcut hashes. Vendored upstream template attribution/license retained. |
 | Error and recovery card above the pill | Partially Implemented | Real Win32 rendering/nonactivation passed at bottom/left/right docks. Synthetic native pixels inspected. Mixed-DPI monitor verification remains open. |
 | Always / Sometimes / Never AI polish | Implemented | Policy/migration regression and browser persistence tests pass. Real Groq synthetic requests pass for Always and Sometimes; Never skips the edit call. Literal words and snippets bypass automatic AI editing. |
 | Robust mixed prose/list layout | Partially Implemented | Tests cover English introductions, prose before an enumerated list and existing Markdown bullets. Ambiguous topic/list structure relies on optional AI; no universal semantic-accuracy claim. |

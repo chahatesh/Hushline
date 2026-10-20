@@ -121,3 +121,20 @@ The actual release dashboard passed secret exclusion, dictionary add/reload/dele
 Guarded per-user silent install, background launch, dependency-license presence, uninstall and retained profile passed in a new owned directory. The interactive wizard and update matrix remain unverified. Fresh-background memory averaged 18.95 MiB working set and 4.16 MiB private; CPU rounded to 0.000% across all processors. These are one-run observations, not hardware-wide guarantees.
 
 Reports: [native desktop](verification/desktop-smoke-0.2.1.json), [installer](verification/installer-test-0.2.1.json), [performance](verification/performance-0.2.1.json), [update](verification/update-0.2.1.json). The source was published in commits 8544c35 and aef7f55. Live microphone-to-target, clipboard restoration after real insertion, full local-edit quality, long live speech, mixed-DPI monitors and independent manual installation remain open. No GitHub Release was published.
+## Hush 0.3.0 verification — 2026-10-20
+
+Rust: 54 passed, 10 explicitly ignored device/live tests in the ordinary suite; no failures. TypeScript: 5 passed. Browser dashboard: 10 passed, including Hush branding, Always/Sometimes/Never selection, persistence and exact-word pause behavior. Formatting and Clippy with warnings denied passed.
+
+The actual release executable passed native snapshot/secret exclusion, all three policy settings through native IPC (then restored the existing preferences), dictionary persistence, saved-key preservation, microphone Test cancellation and normal Stop with safe silence rejection, backup exclusion, dashboard close-to-tray and reopen. The test uploaded no microphone audio and added no history. Dashboard heading observation was 3440 ms including test-only CDP setup.
+
+The final native overlay test painted wrapped error/recovery cards at bottom/left/right docks, retained focus and full active opacity, and passed actual layered-window painting. The synthetic native pixel capture was inspected. Mixed-DPI monitors still require manual checks.
+
+A final local microphone run passed one cold first use followed by three reused starts, all with normal Stop: Ready 666/4/6/3 ms. A separately prepared worker passed starts/cancellations with Ready 8/6/8 ms and first frames 73/59/61 ms. No audio was saved or uploaded. **The user's intermittent first-use red state was not conclusively reproduced.** The card now displays the actual reason and recovery warning; no claim is made that an unidentified hardware, network or insertion failure has been fixed.
+
+Two real Groq `openai/gpt-oss-20b` requests used synthetic text only. Sometimes and Always edits passed structure/content/identifier/number checks, taking 567/671 ms. Never skipped the edit request. These are editing-step observations, not full dictation timings or a general accuracy guarantee.
+
+The first installer test correctly refused a collision with an existing unrelated Hush 0.1 registration. The installer now vendors the exact MIT-licensed Tauri CLI 2.12.3 template, changing only the registry identity and shortcut names. The final package passed guarded per-user silent install, background launch, dependency-license presence, uninstall and profile retention in a fresh owned directory. Existing Hush registration and shortcut hashes remained unchanged. The interactive wizard and upgrade matrix remain unverified.
+
+The new installer and portable ZIP were built. The final background benchmark measured 18.89 MiB mean/peak working set, 4.07 MiB private memory and CPU rounded to 0.000% across 12 logical processors. See [native desktop](verification/desktop-smoke-0.3.0.json), [installer coexistence](verification/installer-test-0.3.0.json), [performance](verification/performance-0.3.0.json) and [formatting checks](verification/formatting-0.3.0.json).
+
+The source is public. Live microphone → Groq → target insertion, real clipboard restoration, selected-text edits, long live speech, multi-monitor acceptance and an independent manual build remain open. No release tag or GitHub Release is published.

@@ -3,6 +3,7 @@
 ## 0.3.0 — unreleased
 
 - Rename the visible product to Hush while retaining the application identifier, database, credential slot and executable for existing profiles.
+- Isolate installer registry identity and Hush Dictation shortcuts from unrelated apps with the same name; retain the upstream Tauri template's MIT attribution.
 - Show wrapped errors and recovery warnings above the native pill at bottom/left/right docks, without activating the window. Keep notices with recovered transcripts visible longer.
 - Add Always / Sometimes / Never AI polish choices. Never overrides automatic app styles; exact words and snippets remain exact. Offline mode stays local.
 - Improve list introductions within prose and preserve/canonicalize explicit Markdown bullet lines. Keep identifiers and code intact.

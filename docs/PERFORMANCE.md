@@ -114,3 +114,10 @@ Measured 2026-10-20T01:00:32.4484818Z (2026-10-19 evening in America/New_York), 
 | Dashboard launch-to-heading observation | **6381 ms**, including test-only CDP setup |
 
 This single fresh-background run excludes the open dashboard, active recording/encoding, local-model inference and shared Windows audio-service memory. The dashboard observation is not a pure cold-start measurement or an improvement claim; it includes test connection overhead and varied machine/cache load. Zero after rounding is not literally no CPU work. See [background data](verification/performance-0.2.1.json).
+## Hush 0.3.0 measured run
+
+On the same Intel i5-1235U / 12 logical processors / 7.7 GiB Windows system, a fresh release background run used five seconds of warmup and 20 samples over 22.10 seconds. Mean/peak working set was **18.89/18.89 MiB**, private memory **4.07 MiB**, and CPU rounded to **0.000%** across all logical processors. The resting native pill and stopped microphone preparation were enabled; there was one process and no dashboard or local model. This excludes shared audio-service memory and active processing. [Raw run](verification/performance-0.3.0.json).
+
+The actual dashboard heading appeared after 3440 ms including test-only connection overhead. This is not a controlled cold-start comparison. A cold-first-use microphone worker took 666 ms to Ready, followed by 4/6/3 ms on reuse. A separately prepared worker took 8/6/8 ms to Ready and 73/59/61 ms to first frames. Initial Windows/device preparation is not instantaneous, and these observations are not latency guarantees.
+
+The two synthetic Groq text-polish requests took 567 and 671 ms with `openai/gpt-oss-20b`. That is extra editing time, excluding capture, speech recognition and target insertion. Always adds an edit for every ordinary dictation; Sometimes applies deterministic length/cue/style checks; Never makes no automatic text-model request. Exact-word mode and saved snippet expansions bypass automatic editing. A real end-to-end latency distribution is still unmeasured.

@@ -5,7 +5,7 @@
 
 Hush is an independent, open-source Windows dictation application built with Rust, Tauri 2, and SolidJS. Hold a shortcut, say what you mean, and insert the result in the field where you were working. Choose Groq cloud recognition with your own API key, or download a local Whisper pack for offline dictation. Local automatic layout adds notes, bullets, and paragraphs without another AI call.
 
-**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The 0.2.1 build averaged 18.95 MiB working set and 4.16 MiB private memory in one documented 20-sample background run with stopped microphone preparation enabled; an open dashboard or active local model adds resource use. Silent installation, native settings/key storage, microphone stopping/cancellation, and dashboard close/reopen passed. A public Groq speech fixture also passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
+**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The 0.3.0 build averaged 18.89 MiB working set and 4.07 MiB private memory in one documented 20-sample background run with stopped microphone preparation enabled; an open dashboard or active local model adds resource use. Silent installation, native settings/key storage, microphone stopping/cancellation, and dashboard close/reopen passed. A public Groq speech fixture also passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
 
 Hush was formerly named Hushline. The existing repository URL, application identifier, database name, credential slot, startup entry and executable name are retained for compatibility; saved keys and preferences stay in place.
 
@@ -28,7 +28,7 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 ## Install
 
-Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. Locally built artifacts, when generated, are in:
+Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. The installer uses a unique Windows registration and “Hush Dictation” shortcuts to avoid overwriting other apps named Hush. Earlier Hushline installations may be removed normally after testing Hush; keep app data when prompted. Locally built artifacts, when generated, are in:
 
 - `src-tauri/target/release/bundle/nsis/Hush_0.3.0_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
 - `artifacts/Hush_0.3.0_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
@@ -87,7 +87,7 @@ Choose **Settings → Dictation → Cloud AI polish**:
 
 Exact-word mode pauses automatic AI editing; exact snippet expansions stay as saved. Command Mode is a separate, explicitly invoked edit. Existing opt-ins migrate to Always; other profiles keep Never. Offline mode uses the same choices with an optional local Ollama model and never sends text to Groq. Failed or rejected AI edits retain locally cleaned text and show a warning.
 
-The **Voice bar** tab docks the native pill at the bottom, left, or right. It stays translucent and still at rest, expands only slightly, and becomes opaque during capture. Click it for hands-free mode, click × to cancel, or right-click to open the dashboard. It does not take keyboard focus. No animations run at rest. Errors and recovery warnings appear in a readable card above the bar; click the card to open Hush.
+The **Voice bar** tab docks the native pill at the bottom, left, or right. It stays translucent and still at rest, expands only slightly, and becomes opaque during capture. Errors appear above the pill ([native error-card capture](docs/screenshots/native-error-card.png)). Click it for hands-free mode, click × to cancel, or right-click to open the dashboard. It does not take keyboard focus. No animations run at rest. Errors and recovery warnings appear in a readable card above the bar; click the card to open Hush.
 
 Shortcut releases no longer fall back into a shorter modifier-only chord. Hold-to-talk is stopped by release or the maximum duration, not the silence timeout. For Windows shortcut conflicts, choose **Shortcuts → Use dedicated-key shortcuts** or record your own combination with the keyboard button.
 

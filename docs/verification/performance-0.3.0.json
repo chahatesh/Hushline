@@ -1,0 +1,103 @@
+{
+    "measuredAt":  "2026-10-20T11:24:30.8374081Z",
+    "executable":  "C:\\Users\\killa\\Hush\\src-tauri\\target\\release\\hushline.exe",
+    "binarySha256":  "57470243BCA146AB90CDF619B1930708C3CC83B835003DC7B08A9FE81BA10A4C",
+    "configuration":  "release, background tray, no webviews created, resting native dock visible; no offline model resident",
+    "cpu":  "12th Gen Intel(R) Core(TM) i5-1235U",
+    "logicalProcessors":  12,
+    "systemMemoryGB":  7.7,
+    "os":  "Microsoft Windows NT 10.0.26300.0",
+    "warmupSeconds":  5,
+    "sampleSeconds":  22.1004643,
+    "processIds":  [
+                       6080
+                   ],
+    "meanWorkingSetMB":  18.89,
+    "peakWorkingSetMB":  18.89,
+    "meanPrivateMB":  4.07,
+    "cpuPercentAllLogicalProcessors":  0,
+    "startupToUsableUI":  "not measured by this background benchmark",
+    "transcriptionLatency":  "not measured; requires live Groq key and spoken sample",
+    "samples":  [
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    },
+                    {
+                        "workingSetMB":  18.89,
+                        "privateMB":  4.07
+                    }
+                ]
+}

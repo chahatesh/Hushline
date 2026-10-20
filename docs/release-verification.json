@@ -1,9 +1,9 @@
 {
-  "version": "0.2.1",
+  "version": "0.3.0",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-20T01:00:32.4484818Z",
-  "evidence": "docs/verification/*0.2.1.json and docs/QA.md. Installer/background launch/uninstall, actual native dashboard, stopped-client starts, cancellation/normal Stop and a saved-key public Groq speech fixture passed. Live microphone-to-Notepad, actual insertion/clipboard restoration and selected-text editing remain unverified. The release gate stays closed.",
+  "testedAt": "2026-10-20T11:30:17.573Z",
+  "evidence": "docs/verification/*0.3.0.json and docs/QA.md. Native UI and policy persistence, microphone normal Stop/cancel, nonactivating error card, installer coexistence/uninstall and synthetic Groq cloud polishing passed. Live microphone-to-target insertion, clipboard restore and command selection acceptance remain unverified. The public release gate stays closed.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,
