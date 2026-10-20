@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 — unreleased
+
+- Unfold the native pill upward from a fixed lower edge as one rounded surface. Status and recovery details stay inside it; bottom and side docking retain their anchors.
+- Use a more vibrant violet/turquoise palette in the native bar, dashboard, previews and original app icon; retain light/dark themes and reduced motion.
+- Deliver microphone activity to the native bar at up to 50 Hz, coalesce pending paint messages, and limit dashboard meter messages to 10 Hz. Reuse drawing surfaces and cached titles rather than allocating them every frame. Idle has no animation timer.
+- Keep whole, distinct vocabulary hints within the request budget instead of cutting through dictionary names or letting one oversized rule crowd out later entries.
+- Recover the remaining audio after a microphone packet gap instead of ending the recording. Display a warning immediately, preserve the transcript for review, and block automatic paste, snippet expansion and AI polishing. Interrupted edit commands are rejected. Missing speech cannot be reconstructed.
+- Add anchor/easing, drawing-reuse, dictionary-budget and interrupted-capture guards, plus real native 50 Hz workload and forced audio-overrun checks. Full speech-to-target and mixed-monitor acceptance remain open.
+
 ## 0.3.0 — unreleased
 
 - Rename the visible product to Hush while retaining the application identifier, database, credential slot and executable for existing profiles.

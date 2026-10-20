@@ -5,10 +5,10 @@ use crate::{
     shortcuts::Action,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
-        atomic::{AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, Ordering},
         mpsc, Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
@@ -25,9 +25,12 @@ use windows::{
 const UPDATE: u32 = WM_APP + 17;
 #[cfg(test)]
 const QUERY_PAINT: u32 = WM_APP + 18;
+#[cfg(test)]
+const QUERY_SURFACES: u32 = WM_APP + 19;
 struct Bridge {
     hwnd: AtomicIsize,
     view: Arc<Mutex<OverlayView>>,
+    pending: AtomicBool,
 }
 #[derive(Clone, Default)]
 struct OverlayView {
@@ -58,7 +61,67 @@ struct Painter {
     fade_from: Cell<u8>,
     fade_to: Cell<u8>,
     transition: Cell<Option<Instant>>,
+    duration: Cell<f64>,
+    corner: Cell<f64>,
+    corner_from: Cell<f64>,
+    corner_to: Cell<f64>,
+    surface: RefCell<Option<Surface>>,
+    surface_builds: Cell<u32>,
+    title: RefCell<String>,
     claimed: Rc<Cell<bool>>,
+}
+// GDI handles and the two small pixel buffers stay on the overlay thread. They
+// are reused until the window changes size; no per-meter bitmap allocation.
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u32,
+    width: i32,
+    height: i32,
+    pixels: Vec<u32>,
+}
+impl Surface {
+    unsafe fn new(hdc: HDC, width: i32, height: i32) -> Option<Self> {
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(Some(hdc), &info, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+        let dc = CreateCompatibleDC(Some(hdc));
+        if dc.0.is_null() {
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            return None;
+        }
+        let old = SelectObject(dc, HGDIOBJ(bitmap.0));
+        Some(Self {
+            dc,
+            bitmap,
+            old,
+            bits: bits.cast(),
+            width,
+            height,
+            pixels: vec![0; (width * height) as usize],
+        })
+    }
+}
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SelectObject(self.dc, self.old);
+            let _ = DeleteObject(HGDIOBJ(self.bitmap.0));
+            let _ = DeleteDC(self.dc);
+        }
+    }
 }
 impl Drop for Painter {
     fn drop(&mut self) {
@@ -120,6 +183,13 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             fade_from: Cell::new(165),
             fade_to: Cell::new(165),
             transition: Cell::new(None),
+            duration: Cell::new(0.17),
+            corner: Cell::new(8.0),
+            corner_from: Cell::new(8.0),
+            corner_to: Cell::new(8.0),
+            surface: RefCell::new(None),
+            surface_builds: Cell::new(0),
+            title: RefCell::new(String::new()),
             claimed: claimed.clone(),
         });
         let pointer = Rc::into_raw(painter);
@@ -161,6 +231,7 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
         .set(Bridge {
             hwnd: AtomicIsize::new(hwnd),
             view,
+            pending: AtomicBool::new(false),
         })
         .map_err(|_| "Native overlay is already running.".to_string())
 }
@@ -177,9 +248,14 @@ pub fn update(view: &View) {
                 theme: v.theme.clone(),
             };
         }
+        queue_update(bridge);
+    }
+}
+fn queue_update(bridge: &Bridge) {
+    if !bridge.pending.swap(true, Ordering::AcqRel) {
         let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
-        unsafe {
-            let _ = PostMessageW(Some(hwnd), UPDATE, WPARAM(0), LPARAM(0));
+        if unsafe { PostMessageW(Some(hwnd), UPDATE, WPARAM(0), LPARAM(0)) }.is_err() {
+            bridge.pending.store(false, Ordering::Release);
         }
     }
 }
@@ -216,7 +292,7 @@ unsafe fn fonts(hwnd: HWND, p: &Painter) {
         )
     };
     p.font.set(make(13));
-    p.small.set(make(9));
+    p.small.set(make(11));
 }
 pub fn configure(settings: &Settings) {
     if let Some(bridge) = BRIDGE.get() {
@@ -224,14 +300,7 @@ pub fn configure(settings: &Settings) {
             v.dock = settings.dock.clone();
             v.theme = settings.theme.clone();
         }
-        unsafe {
-            let _ = PostMessageW(
-                Some(HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _)),
-                UPDATE,
-                WPARAM(0),
-                LPARAM(0),
-            );
-        }
+        queue_update(bridge);
     }
 }
 fn dock_id(value: &str) -> u8 {
@@ -245,13 +314,40 @@ fn dock_id(value: &str) -> u8 {
 fn dimensions(active: bool, side: bool) -> (f64, f64) {
     match (active, side) {
         (false, false) => (48.0, 16.0),
-        (true, false) => (136.0, 30.0),
+        (true, false) => (168.0, 48.0),
         (false, true) => (16.0, 48.0),
-        (true, true) => (30.0, 112.0),
+        (true, true) => (40.0, 128.0),
+    }
+}
+fn dock_bounds(work: RECT, dock: u8, width: i32, height: i32, scale: f64) -> RECT {
+    let gap = (7.0 * scale) as i32;
+    let bottom = if matches!(dock, 1 | 2) {
+        work.top + (work.bottom - work.top) / 2 + (24.0 * scale) as i32
+    } else {
+        work.bottom - gap
+    };
+    let left = match dock {
+        1 => work.left + gap,
+        2 => work.right - width - gap,
+        _ => work.left + (work.right - work.left - width) / 2,
+    };
+    RECT {
+        left,
+        top: bottom - height,
+        right: left + width,
+        bottom,
+    }
+}
+fn eased_progress(t: f64, entering: bool) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    if entering {
+        1.0 - (1.0 - t).powi(3)
+    } else {
+        t * t
     }
 }
 fn notice_text(view: &OverlayView) -> String {
-    if view.phase == "idle" || view.phase == "listening" || view.phase == "processing" {
+    if view.phase == "idle" {
         return String::new();
     }
     let message = if view.phase == "error" {
@@ -330,33 +426,15 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     let (width, height) = dimensions(active, dock == 1 || dock == 2);
     let width = (width * scale) as i32;
     let height = (height * scale) as i32;
-    let gap = ((if active { 10.0 } else { 7.0 }) * scale) as i32;
-    let (x, y) = match dock {
-        1 => (
-            info.rcWork.left + gap,
-            info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2,
-        ),
-        2 => (
-            info.rcWork.right - width - gap,
-            info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2,
-        ),
-        _ => (
-            info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2,
-            info.rcWork.bottom - height - gap,
-        ),
-    };
-    let mut rect = RECT {
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
-    };
+    let mut rect = dock_bounds(info.rcWork, dock, width, height, scale);
+    let x = rect.left;
     let notice = notice_text(&view);
     let card_width = ((340.0 * scale) as i32).min(info.rcWork.right - info.rcWork.left - 20);
     let card_height = notice_height(hwnd, p, &notice, card_width);
     if card_height > 0 {
         let full_width = width.max(card_width);
-        let full_height = height + card_height + (8.0 * scale) as i32;
+        let footer = (48.0 * scale) as i32;
+        let full_height = footer + card_height;
         rect.left = match dock {
             1 => x,
             2 => x + width - full_width,
@@ -365,18 +443,13 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
         rect.left = rect
             .left
             .clamp(info.rcWork.left, info.rcWork.right - full_width);
-        rect.top = (y + height - full_height).max(info.rcWork.top);
+        rect.top = (rect.bottom - full_height).max(info.rcWork.top);
         rect.right = rect.left + full_width;
         rect.bottom = rect.top + full_height;
-        let pill_x = match dock {
-            1 => 0,
-            2 => full_width - width,
-            _ => (full_width - width) / 2,
-        };
         p.pill.set(RECT {
-            left: pill_x,
-            top: full_height - height,
-            right: pill_x + width,
+            left: 0,
+            top: full_height - footer,
+            right: full_width,
             bottom: full_height,
         });
         p.notice.set(RECT {
@@ -402,16 +475,29 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     p.to.set(rect);
     p.fade_from.set(p.alpha.get());
     p.fade_to.set(alpha);
+    p.corner_from.set(p.corner.get());
+    p.corner_to.set(if card_height > 0 {
+        18.0
+    } else {
+        (width.min(height) as f64 / scale) / 2.0
+    });
     // Mark the layout before SetWindowPos can synchronously reenter for DPI changes.
-    let previous_notice = p.layout.get().2;
     p.layout.set((active, dock, notice_id(&view)));
-    if animate && visible && p.animated && previous_notice == notice_id(&view) && card_height == 0 {
+    p.duration.set(if card_height > 0 {
+        0.22
+    } else if active {
+        0.17
+    } else {
+        0.13
+    });
+    if animate && visible && p.animated {
         p.transition.set(Some(Instant::now()));
         SetTimer(Some(hwnd), 2, 16, None);
     } else {
         p.transition.set(None);
         let _ = KillTimer(Some(hwnd), 2);
         p.alpha.set(alpha);
+        p.corner.set(p.corner_to.get());
         geometry(hwnd, p, rect);
     }
 }
@@ -451,12 +537,24 @@ unsafe fn wrapped_text(hdc: HDC, value: &str, mut rect: RECT, font: HFONT) {
 // Signed distance to a rounded box gives fractional edge coverage at every DPI.
 // Unlike a window region, per-pixel alpha retains the antialiased outer pixels.
 fn coverage(x: f64, y: f64, width: f64, height: f64, radius: f64) -> f64 {
+    if (x >= radius && x <= width - radius && y >= 0.5 && y <= height - 0.5)
+        || (y >= radius && y <= height - radius && x >= 0.5 && x <= width - 0.5)
+    {
+        return 1.0;
+    }
     let qx = (x - width / 2.0).abs() - (width / 2.0 - radius);
     let qy = (y - height / 2.0).abs() - (height / 2.0 - radius);
     let distance = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
     (0.5 - distance).clamp(0.0, 1.0)
 }
 fn composite(pixel: &mut u32, color: COLORREF, opacity: f64) {
+    if opacity <= 0.0 {
+        return;
+    }
+    if opacity >= 1.0 {
+        *pixel = 0xff000000 | (color.0 & 255) << 16 | (color.0 & 0xff00) | (color.0 >> 16 & 255);
+        return;
+    }
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
     let inverse = 255 - alpha;
     let r = color.0 & 255;
@@ -499,83 +597,108 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     fonts(hwnd, p);
     let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
     let active = view.phase != "idle" && !view.phase.is_empty();
-    let side = matches!(dock_id(&view.dock), 1 | 2);
+    let expanded = p.notice.get().bottom > 0;
+    let side = matches!(dock_id(&view.dock), 1 | 2) && !expanded;
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let mut client = RECT::default();
     let _ = GetClientRect(hwnd, &mut client);
     let (width, height) = (client.right.max(1), client.bottom.max(1));
-    let info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bits = std::ptr::null_mut();
-    let Ok(bitmap) = CreateDIBSection(Some(hdc), &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+    let Ok(mut slot) = p.surface.try_borrow_mut() else {
         let _ = EndPaint(hwnd, &ps);
         return;
     };
-    let dc = CreateCompatibleDC(Some(hdc));
-    let old = SelectObject(dc, HGDIOBJ(bitmap.0));
-    let memory = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
-    memory.fill(0);
-    let scale = p.dpi.get() as f64 / 96.0;
-    let pill = p.pill.get();
-    let (ox, oy) = (pill.left as f64 / scale, pill.top as f64 / scale);
-    let (w, h) = if p.notice.get().bottom > 0 {
-        (
-            (pill.right - pill.left) as f64 / scale,
-            (pill.bottom - pill.top) as f64 / scale,
-        )
-    } else {
-        (width as f64 / scale, height as f64 / scale)
+    if slot
+        .as_ref()
+        .is_none_or(|s| s.width != width || s.height != height)
+    {
+        *slot = Surface::new(hdc, width, height);
+        p.surface_builds.set(p.surface_builds.get() + 1);
+    }
+    let Some(surface) = slot.as_mut() else {
+        let _ = EndPaint(hwnd, &ps);
+        return;
     };
-    let light = view.theme == "light";
-    let background = if view.phase == "error" {
-        rgb(84, 40, 45)
-    } else if light {
-        rgb(241, 245, 251)
+    let dc = surface.dc;
+    let memory = std::slice::from_raw_parts_mut(surface.bits, (width * height) as usize);
+    memory.fill(0);
+    let pixels = &mut surface.pixels;
+    pixels.fill(0);
+    let scale = p.dpi.get() as f64 / 96.0;
+    let w = width as f64 / scale;
+    let footer = if expanded {
+        (48.0 * scale) as i32
     } else {
-        rgb(27, 35, 48)
+        height
+    };
+    let top = if expanded {
+        (height - footer).max(0)
+    } else {
+        0
+    };
+    let oy = top as f64 / scale;
+    let h = (height - top) as f64 / scale;
+    p.pill.set(RECT {
+        left: 0,
+        top,
+        right: width,
+        bottom: height,
+    });
+    let light = view.theme == "light";
+    let background = if light {
+        rgb(247, 242, 255)
+    } else {
+        rgb(35, 23, 55)
     };
     let ink = if light {
-        rgb(43, 68, 102)
+        rgb(53, 29, 85)
     } else {
-        rgb(218, 231, 249)
+        rgb(244, 236, 255)
     };
-    let accent = if view.phase == "error" {
-        rgb(255, 184, 174)
-    } else if view.phase == "success" {
-        rgb(142, 220, 180)
+    let (violet, turquoise) = if light {
+        (rgb(111, 57, 208), rgb(7, 133, 124))
     } else {
-        rgb(158, 190, 237)
+        (rgb(179, 134, 255), rgb(62, 234, 210))
     };
-    let mut pixels = vec![0u32; memory.len()];
-    rounded(
-        &mut pixels,
+    let accent = match view.phase.as_str() {
+        "error" => {
+            if light {
+                rgb(192, 40, 87)
+            } else {
+                rgb(255, 134, 166)
+            }
+        }
+        "success" => turquoise,
+        _ => violet,
+    };
+    let radius = (p.corner.get() * scale).min(width.min(height) as f64 / 2.0);
+    // A single continuous surface unfolds above the anchored lower edge.
+    rounded_radius(
+        pixels,
         width,
         height,
-        (
-            ox * scale + 0.5,
-            oy * scale + 0.5,
-            w * scale - 1.0,
-            h * scale - 1.0,
-        ),
+        (0.5, 0.5, width as f64 - 1.0, height as f64 - 1.0),
+        if light {
+            rgb(208, 184, 244)
+        } else {
+            rgb(92, 59, 138)
+        },
+        radius,
+    );
+    rounded_radius(
+        pixels,
+        width,
+        height,
+        (1.5, 1.5, width as f64 - 3.0, height as f64 - 3.0),
         background,
+        (radius - 1.0).max(0.0),
     );
     let mut shape = |x: f64, y: f64, w: f64, h: f64, color| {
         rounded(
-            &mut pixels,
+            pixels,
             width,
             height,
-            ((x + ox) * scale, (y + oy) * scale, w * scale, h * scale),
+            (x * scale, (y + oy) * scale, w * scale, h * scale),
             color,
         )
     };
@@ -587,38 +710,51 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         }
     } else {
         let level = if view.phase == "processing" {
-            0.25
+            0.35
         } else if view.phase == "listening" {
             view.level
         } else {
             0.0
         };
+        let time = if p.animated {
+            if view.phase == "processing" {
+                p.tick.get() as f32 * 0.24
+            } else {
+                view.seconds * 3.0
+            }
+        } else {
+            0.0
+        };
         for i in 0..11 {
-            let variation = 0.25 + (i as f32 * 1.31 + p.tick.get() as f32 * 0.4).sin().abs() * 0.75;
-            let amplitude = 3.0 + level as f64 * 14.0 * variation as f64;
+            let variation = 0.25 + (i as f32 * 1.31 + time).sin().abs() * 0.75;
+            let amplitude = 3.0 + level as f64 * 15.0 * variation as f64;
+            let color = if matches!(view.phase.as_str(), "error" | "success") {
+                accent
+            } else {
+                mix_color(violet, turquoise, i as f64 / 10.0)
+            };
             if side {
                 shape(
                     (w - amplitude) / 2.0,
-                    13.0 + i as f64 * 5.0,
+                    17.0 + i as f64 * 6.0,
                     amplitude,
-                    2.0,
-                    accent,
+                    2.5,
+                    color,
                 )
             } else {
                 shape(
-                    13.0 + i as f64 * 4.2,
-                    (h - amplitude) / 2.0,
-                    2.2,
+                    15.0 + i as f64 * 5.0,
+                    32.0 - amplitude / 2.0,
+                    2.6,
                     amplitude,
-                    accent,
+                    color,
                 )
             }
         }
-        // The cancel mark is deliberately small; its hit area remains generous.
         let (cx, cy) = if side {
-            (w / 2.0, h - 15.0)
+            (w / 2.0, h - 16.0)
         } else {
-            (w - 15.0, h / 2.0)
+            (w - 17.0, 32.0)
         };
         for i in -4..=4 {
             let v = i as f64 * 0.65;
@@ -626,53 +762,54 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             shape(cx + v - 0.6, cy - v - 0.6, 1.2, 1.2, ink);
         }
         if !side {
-            let label = match view.phase.as_str() {
-                "listening" if view.message == "Starting microphone" => "…".into(),
-                "listening" => format!(
+            let status = match view.phase.as_str() {
+                "listening" if view.message == "Starting microphone" => "Getting ready",
+                "listening" => "Listening",
+                "processing" if view.message == "Formatting your words" => "Polishing",
+                "processing" => "Transcribing",
+                "success" => "Done",
+                "error" => "Open Hush for help",
+                _ => "Review your edit",
+            };
+            let timer = if view.phase == "listening" && view.message != "Starting microphone" {
+                format!(
                     "{}:{:02}",
                     view.seconds as u32 / 60,
                     view.seconds as u32 % 60
-                ),
-                "processing" => "…".into(),
-                "success" => "Done".into(),
-                "error" => "!".into(),
-                _ => "Edit".into(),
+                )
+            } else if view.phase == "processing" {
+                "…".into()
+            } else {
+                String::new()
             };
             let _ = SetBkMode(dc, TRANSPARENT);
             text(
                 dc,
-                &label,
+                status,
                 RECT {
-                    left: ((ox + 70.0) * scale) as i32,
-                    top: (oy * scale) as i32,
-                    right: ((ox + w - 29.0) * scale) as i32,
-                    bottom: ((oy + h) * scale) as i32,
+                    left: (15.0 * scale) as i32,
+                    top: top + (3.0 * scale) as i32,
+                    right: width - (14.0 * scale) as i32,
+                    bottom: top + (21.0 * scale) as i32,
                 },
                 p.small.get(),
                 rgb(255, 255, 255),
             );
-            // GDI writes RGB glyph coverage; composite it into the premultiplied DIB.
-            let _ = GdiFlush();
-            for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
-                composite(pixel, ink, (mask & 255) as f64 / 255.0);
-            }
+            text(
+                dc,
+                &timer,
+                RECT {
+                    left: (95.0 * scale) as i32,
+                    top: top + (23.0 * scale) as i32,
+                    right: width - (29.0 * scale) as i32,
+                    bottom: height - (4.0 * scale) as i32,
+                },
+                p.small.get(),
+                rgb(255, 255, 255),
+            );
         }
     }
-    let card = p.notice.get();
-    if card.bottom > 0 {
-        rounded_radius(
-            &mut pixels,
-            width,
-            height,
-            (0.5, 0.5, card.right as f64 - 1.0, card.bottom as f64 - 1.0),
-            if light {
-                rgb(250, 250, 252)
-            } else {
-                rgb(32, 36, 44)
-            },
-            14.0 * scale,
-        );
-        memory.fill(0);
+    if expanded && top > 0 {
         let padding = (14.0 * scale) as i32;
         let _ = SetBkMode(dc, TRANSPARENT);
         wrapped_text(
@@ -681,25 +818,26 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             RECT {
                 left: padding,
                 top: padding,
-                right: card.right - padding,
-                bottom: card.bottom - padding,
+                right: width - padding,
+                bottom: (top - padding).max(padding),
             },
             p.font.get(),
         );
-        let _ = GdiFlush();
-        for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
-            composite(
-                pixel,
-                if light {
-                    rgb(42, 47, 58)
-                } else {
-                    rgb(240, 242, 247)
-                },
-                (mask & 255) as f64 / 255.0,
-            );
-        }
     }
-    memory.copy_from_slice(&pixels);
+    let _ = GdiFlush();
+    let reveal = if let Some(started) = p.transition.get() {
+        if p.to.get().bottom - p.to.get().top > p.from.get().bottom - p.from.get().top {
+            (started.elapsed().as_secs_f64() / p.duration.get() / 0.75).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+    for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
+        composite(pixel, ink, (mask & 255) as f64 / 255.0 * reveal);
+    }
+    memory.copy_from_slice(pixels);
     let _ = GdiFlush();
     let painted = UpdateLayeredWindow(
         hwnd,
@@ -730,11 +868,18 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             let _ = std::fs::write(directory.join(format!("bar-{width}x{height}.bgra")), data);
         }
     }
-    let _ = SelectObject(dc, old);
-    let _ = DeleteObject(HGDIOBJ(bitmap.0));
-    let _ = DeleteDC(dc);
     let _ = EndPaint(hwnd, &ps);
 }
+
+fn mix_color(a: COLORREF, b: COLORREF, t: f64) -> COLORREF {
+    let channel = |shift: u32| {
+        let a = ((a.0 >> shift) & 255u32) as f64;
+        let b = ((b.0 >> shift) & 255u32) as f64;
+        (a + (b - a) * t).round() as u8
+    };
+    rgb(channel(0), channel(8), channel(16))
+}
+
 unsafe extern "system" fn procedure(
     hwnd: HWND,
     message: u32,
@@ -757,6 +902,8 @@ unsafe extern "system" fn procedure(
     match message {
         #[cfg(test)]
         QUERY_PAINT => LRESULT(p.alpha.get() as isize | if p.paint_ok.get() { 256 } else { 0 }),
+        #[cfg(test)]
+        QUERY_SURFACES => LRESULT(p.surface_builds.get() as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
@@ -769,46 +916,54 @@ unsafe extern "system" fn procedure(
             LRESULT(0)
         }
         UPDATE => {
+            if let Some(bridge) = BRIDGE.get() {
+                bridge.pending.store(false, Ordering::Release);
+            }
             let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
             let active = view.phase != "idle" && !view.phase.is_empty();
             let dock = dock_id(&view.dock);
             if p.layout.get() != (active, dock, notice_id(&view)) {
-                // Snap between docks/monitors; only the small activation lift animates.
+                // Snap across docks/monitors; unfold upward within the current dock.
                 let same_dock = p.layout.get().1 == dock;
                 let same_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
                     == MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
                 position(hwnd, &p, same_dock && same_monitor);
             }
             if view.phase == "processing" && p.animated {
-                SetTimer(Some(hwnd), 1, 100, None);
+                SetTimer(Some(hwnd), 1, 40, None);
             } else {
                 let _ = KillTimer(Some(hwnd), 1);
             }
-            let title: Vec<u16> = format!(
-                "Hush · {}",
-                if active {
-                    view.message.as_str()
-                } else {
-                    "Ready — click to dictate; right-click for settings"
-                }
-            )
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-            let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(title.as_ptr()));
+            let label = if active {
+                view.message.as_str()
+            } else {
+                "Ready — click to dictate; right-click for settings"
+            };
+            let title_changed = p.title.borrow().as_str() != label;
+            if title_changed {
+                let title: Vec<u16> = format!("Hush · {label}")
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(title.as_ptr()));
+                *p.title.borrow_mut() = label.to_string();
+            }
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_TIMER => {
             if wparam.0 == 2 {
                 if let Some(started) = p.transition.get() {
-                    let t = (started.elapsed().as_secs_f64() / 0.16).min(1.0);
-                    let eased = 1.0 - (1.0 - t).powi(3);
+                    let t = (started.elapsed().as_secs_f64() / p.duration.get()).min(1.0);
+                    let eased = eased_progress(t, p.layout.get().0);
                     let mix = |a: i32, b: i32| (a as f64 + (b - a) as f64 * eased).round() as i32;
                     let a = p.from.get();
                     let b = p.to.get();
                     p.alpha
                         .set(mix(p.fade_from.get() as i32, p.fade_to.get() as i32) as u8);
+                    p.corner.set(
+                        p.corner_from.get() + (p.corner_to.get() - p.corner_from.get()) * eased,
+                    );
                     geometry(
                         hwnd,
                         &p,
@@ -841,7 +996,7 @@ unsafe extern "system" fn procedure(
             let _ = GetClientRect(hwnd, &mut client);
             let x = lparam.0 as u16 as i32;
             let y = (lparam.0 >> 16) as u16 as i32;
-            let side = matches!(dock_id(&view.dock), 1 | 2);
+            let side = matches!(dock_id(&view.dock), 1 | 2) && p.notice.get().bottom == 0;
             let scale = p.dpi.get() as f64 / 96.0;
             let pill = p.pill.get();
             let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
@@ -883,6 +1038,42 @@ unsafe extern "system" fn procedure(
 mod tests {
     use super::*;
     #[test]
+    fn unfolding_keeps_the_lower_edge_anchored_at_every_dock_and_scale() {
+        let work = RECT {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1040,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            for dock in [0, 1, 2] {
+                let side = dock != 0;
+                let rect = |active| {
+                    let (w, h) = dimensions(active, side);
+                    dock_bounds(work, dock, (w * scale) as i32, (h * scale) as i32, scale)
+                };
+                let rest = rect(false);
+                let active = rect(true);
+                assert_eq!(rest.bottom, active.bottom);
+                assert!(active.top < rest.top);
+                if dock == 1 {
+                    assert_eq!(rest.left, active.left);
+                }
+                if dock == 2 {
+                    assert_eq!(rest.right, active.right);
+                }
+            }
+        }
+        for entering in [true, false] {
+            let values: Vec<_> = (0..=20)
+                .map(|i| eased_progress(i as f64 / 20.0, entering))
+                .collect();
+            assert_eq!(values[0], 0.0);
+            assert_eq!(values[20], 1.0);
+            assert!(values.windows(2).all(|v| v[0] <= v[1]));
+        }
+    }
+    #[test]
     fn pill_edges_have_fractional_alpha_and_correct_premultiplication() {
         assert_eq!(coverage(0.0, 0.0, 48.0, 16.0, 8.0), 0.0);
         assert_eq!(coverage(24.0, 8.0, 48.0, 16.0, 8.0), 1.0);
@@ -906,9 +1097,72 @@ mod tests {
             "Microphone unavailable\n\nChoose another device in Settings"
         );
         v.phase = "listening".into();
-        assert!(notice_text(&v).is_empty());
+        assert_eq!(notice_text(&v), "Choose another device in Settings");
         v.phase = "success".into();
         assert_eq!(notice_text(&v), "Choose another device in Settings");
+    }
+    #[test]
+    #[ignore = "Shows synthetic 50-Hz voice activity for five seconds; no microphone or network."]
+    fn native_overlay_active_workload() {
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        fn cpu() -> f64 {
+            unsafe {
+                let (mut created, mut exit, mut kernel, mut user) = (
+                    FILETIME::default(),
+                    FILETIME::default(),
+                    FILETIME::default(),
+                    FILETIME::default(),
+                );
+                GetProcessTimes(
+                    GetCurrentProcess(),
+                    &mut created,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+                .unwrap();
+                let ticks = |v: FILETIME| (v.dwHighDateTime as u64) << 32 | v.dwLowDateTime as u64;
+                (ticks(kernel) + ticks(user)) as f64 / 10_000_000.0
+            }
+        }
+        let (tx, _) = mpsc::channel();
+        start(tx).unwrap();
+        configure(&Settings::default());
+        update(&View {
+            phase: "listening".into(),
+            message: "Synthetic voice activity".into(),
+            ..View::default()
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        let bridge = BRIDGE.get().unwrap();
+        let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
+        let surfaces = unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 };
+        let started = Instant::now();
+        let before = cpu();
+        let mut readings = 0;
+        while started.elapsed() < Duration::from_secs(5) {
+            update(&View {
+                phase: "listening".into(),
+                message: "Synthetic voice activity".into(),
+                level: (readings as f32 * 0.12).sin().abs(),
+                seconds: started.elapsed().as_secs_f32(),
+                ..View::default()
+            });
+            readings += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let used = cpu() - before;
+        let logical = std::thread::available_parallelism().unwrap().get();
+        println!("Synthetic meter readings: {readings}; native CPU seconds: {used:.4}; all-logical CPU: {:.3}%",
+            used/started.elapsed().as_secs_f64()/logical as f64*100.0);
+        assert_eq!(
+            unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 },
+            surfaces
+        );
+        update(&View {
+            phase: "idle".into(),
+            ..View::default()
+        });
     }
     #[test]
     #[ignore = "Shows the real native overlay briefly; requires a Windows desktop without concurrent focus changes."]
@@ -922,6 +1176,16 @@ mod tests {
         unsafe {
             let _ = SendMessageW(initial_hwnd, WM_PAINT, None, None);
         }
+        configure(&Settings::default());
+        update(&View {
+            phase: "idle".into(),
+            ..View::default()
+        });
+        let mut resting = RECT::default();
+        unsafe {
+            SendMessageW(initial_hwnd, UPDATE, None, None);
+            GetWindowRect(initial_hwnd, &mut resting).unwrap();
+        }
         update(&View {
             phase: "listening".into(),
             message: "Native overlay verification".into(),
@@ -931,6 +1195,18 @@ mod tests {
         });
         let bridge = BRIDGE.get().unwrap();
         let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
+        unsafe {
+            SendMessageW(hwnd, UPDATE, None, None);
+        }
+        std::thread::sleep(Duration::from_millis(40));
+        let mut opening = RECT::default();
+        unsafe {
+            GetWindowRect(hwnd, &mut opening).unwrap();
+        }
+        assert_eq!(
+            opening.bottom, resting.bottom,
+            "Opening moved the resting lower edge"
+        );
         let wait = std::time::Instant::now();
         while !unsafe { IsWindowVisible(hwnd) }.as_bool() && wait.elapsed() < Duration::from_secs(2)
         {
@@ -951,8 +1227,19 @@ mod tests {
         unsafe {
             GetWindowRect(hwnd, &mut bounds).unwrap();
         }
-        assert_eq!(bounds.right - bounds.left, (136.0 * scale) as i32);
-        assert_eq!(bounds.bottom - bounds.top, (30.0 * scale) as i32);
+        assert_eq!(bounds.right - bounds.left, (168.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (48.0 * scale) as i32);
+        let surface_count = unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 };
+        for _ in 0..20 {
+            unsafe {
+                SendMessageW(hwnd, WM_PAINT, None, None);
+            }
+        }
+        assert_eq!(
+            unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 },
+            surface_count,
+            "Steady-state painting reallocated the native drawing surface"
+        );
         let state = unsafe {
             SendMessageW(hwnd, WM_PAINT, None, None);
             SendMessageW(hwnd, QUERY_PAINT, None, None).0
@@ -971,8 +1258,8 @@ mod tests {
         unsafe {
             GetWindowRect(hwnd, &mut bounds).unwrap();
         }
-        assert_eq!(bounds.right - bounds.left, (30.0 * scale) as i32);
-        assert_eq!(bounds.bottom - bounds.top, (112.0 * scale) as i32);
+        assert_eq!(bounds.right - bounds.left, (40.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (128.0 * scale) as i32);
         // The real wrapped error surface must remain nonactivating at every dock.
         for dock in ["bottom", "left", "right"] {
             configure(&Settings {
@@ -983,7 +1270,7 @@ mod tests {
                 message:"Your microphone is unavailable. Reconnect it or choose another microphone in Settings.".into(),
                 warning:"Click this message to open Hush. Your clipboard has not changed.".into(),
                 ..View::default() });
-            std::thread::sleep(Duration::from_millis(220));
+            std::thread::sleep(Duration::from_millis(280));
             unsafe {
                 GetWindowRect(hwnd, &mut bounds).unwrap();
             }

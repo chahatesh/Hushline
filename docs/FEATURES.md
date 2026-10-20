@@ -7,7 +7,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Original identity, logo, original source, author attribution | Implemented | Original SVG and source, visible UI screenshots, README author section. |
 | Genuine MIT license | Implemented | Complete standard license; Copyright (c) 2026 Chahatesh; SPDX source headers. Third-party terms preserved. |
 | Rust/Tauri 2/Solid modular architecture | Implemented | Native compilation and unit tests, production frontend build, actual Tauri IPC smoke test. |
-| No Hushline account, subscription, artificial app quota, or telemetry | Implemented | No account/analytics service or app usage gate exists; reviewed source. Groq account terms still apply. |
+| No Hush account, subscription, artificial app quota, or telemetry | Implemented | No account/analytics service or app usage gate exists; reviewed source. Groq account terms still apply. |
 | Native WASAPI microphone capture | Partially Implemented | Stopped native-client preparation, actual frames/cancellation and normal Stop passed. More devices and full microphone-to-target compatibility remain unverified. |
 | Microphone enumeration and selection | Partially Implemented | Native enumeration plus dashboard selector; duplicate device names are not disambiguated by stable ID. |
 | Voice activity detection / sustained silence | Partially Implemented | Energy threshold and duration bounds implemented. Quiet/noisy room validation and semantic speech detection remain incomplete. |
@@ -19,7 +19,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Escape cancellation and rapid reactivation | Partially Implemented | Cancellation tokens, generations, and idle/modifier Escape routing tested. Real rapid capture/insertion tests pending. |
 | Custom keyboard and Mouse4/5 bindings | Partially Implemented | Chord parser and duplicate/conflict tests pass; real extra-mouse-button tests pending. Conflicts with other software cannot all be detected. |
 | Copy/paste last, dashboard/scratchpad shortcuts | Partially Implemented | Code paths and UI controls exist; global delivery verification pending. |
-| Groq transcription, model/language/vocabulary parameters | Partially Implemented | Documented multipart fixtures pass. A saved-key public speech fixture passed through Groq Turbo in 2,542 ms; live microphone-to-target acceptance remains open. |
+| Groq transcription, model/language/vocabulary parameters | Partially Implemented | Documented multipart fixtures pass. The 0.3.1 saved-key public speech fixture passed through Groq Turbo in 1,342 ms; live microphone-to-target acceptance remains open. |
 | Whisper Turbo / accuracy model choice, multilingual recognition | Partially Implemented | Real supported model IDs and language parameter configured; live multilingual accuracy not tested. |
 | Timeout, network error, retry, rate-limit, cancellation handling | Partially Implemented | Executed loopback fixtures verify multipart, retry, 401, 429, cancellation, and truncated AI responses. Live provider interruption/rate tests pending. |
 | Model discovery and configurable Groq text models | Partially Implemented | Native discovery/cache and dashboard configuration exist; live account model availability unverified. |
@@ -50,16 +50,16 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Context executable detection | Partially Implemented | Windows process lookup and optional style matching exist; real app compatibility unverified. |
 | Browser-domain matching / nearby text permission | Not Implemented | No screenshots, domains, or surrounding text are collected. |
 | Command Mode selected text + Groq edit + preview + guarded replace | Partially Implemented | Opt-in selection and preview logic, truncated-response test implemented. End-to-end selection/edit/replacement unverified. |
-| Credential Manager secure key storage | Partially Implemented | Native OS-backed storage, dummy-key round-trip and real Tauri key-entry/removal passed. No real Groq authentication tested. |
+| Credential Manager secure key storage | Partially Implemented | Native OS-backed storage, earlier dummy-key round-trip and Tauri key-entry/removal passed. Saved real key authenticated the public Groq fixture and was preserved. Independent upgrade/manual acceptance remains open. |
 | Configuration backup/restore | Implemented | UI export/exclusion and transactional invalid-restore rollback tested. Keys/history/scratchpad excluded. |
 | Tray, close/reopen, optional startup, single instance | Partially Implemented | Actual desktop close-to-tray and reopen passed, as did installed background launch/uninstall. Startup opt-in and upgrades still need manual checks. |
 | Windows installer and portable artifact | Partially Implemented | Packaging configuration/scripts exist; consult QA for generated artifact/build result. Silent install/background launch/uninstall passed; interactive wizard and upgrades pending. |
 | Automatic signed updater / update checks | Not Implemented | Manual trusted installer updates only. |
 | Diagnostics / benchmark report | Partially Implemented | Local test reports, history timing, and process-tree measurement script. Actual measured results and gaps are in PERFORMANCE.md. No in-app diagnostic bundle or update service. |
 | Public repository / downloadable GitHub Release | Partially Implemented | Public repository created at https://github.com/chahatesh/Hushline. Source publication and hosted checks are tracked in QA; no unverified GitHub Release is published. |
-| CI/CD workflows | Partially Implemented | Windows lint/test/build/package and gated draft-release workflows written; the base hosted run passed tests/build/offline inference but failed its portable hashing step. The .NET hashing fix is included; the updated hosted run is tracked in QA. |
+| CI/CD workflows | Partially Implemented | Hosted 0.3.0 lint/test/build, real offline fixture, installer and portable artifact generation passed. Current-revision run is tracked in QA. Release automation remains gated by incomplete manual acceptance. |
 | Broad real Windows application compatibility | Not Implemented | No universal compatibility claim. Required live Notepad/browser/Office/editor/chat matrix remains open. |
-| Performance engineering targets | Partially Implemented | Event-driven architecture, bounded buffers, reused HTTP client, opt-in AI, released dashboard. Final fresh-background run measured 16.61 MiB working set, 3.61 MiB private, and rounded 0% CPU. No live speech latency claim. |
+| Performance engineering targets | Partially Implemented | Event-driven architecture, bounded buffers, reused HTTP client, opt-in AI, released dashboard. The 0.3.0 fresh-background run measured 18.89 MiB working set, 4.07 MiB private, rounded 0% CPU. Current measurements are in PERFORMANCE.md. No live speech latency claim. |
 
 The decisive missing evidence is an uninterrupted real user session: install → enter a valid Groq key → choose a microphone → focus Notepad → hold/speak/release → correct text in the original field, followed by the same workflow's cancellation, focus-change, private-mode, clipboard, and command-edit checks.
 
@@ -100,3 +100,12 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Robust mixed prose/list layout | Partially Implemented | Tests cover English introductions, prose before an enumerated list and existing Markdown bullets. Ambiguous topic/list structure relies on optional AI; no universal semantic-accuracy claim. |
 | Sentence-aware terminal periods | Partially Implemented | Clear English fragments lose a terminal dot; recognized complete sentences/identifiers/literal text retain punctuation. Unknown local constructions retain their punctuation. AI is instructed to handle other fragments. |
 | Reported intermittent red first-use state | Partially Implemented | Cold first-start plus four normal-stop captures passed, and the configured mic completed the packaged test. The user's exact intermittent failure was not reproduced conclusively. Error details are now visible instead of only a red symbol. |
+
+## 0.3.1 refinements
+
+| Feature | Status | Evidence / limits |
+| --- | --- | --- |
+| Unified upward expansion and stronger palette | Partially Implemented | Real native layered-window painting, fixed lower anchors, focus preservation, opaque active body and inspected pixels passed. Browser light/dark controls and upward preview passed. Actual mixed-DPI/multi-monitor and manual visual acceptance remain open. |
+| Faster voice feedback and reused rendering resources | Implemented | Active capture interval is 20 ms; native update messages are coalesced, dashboard metering is capped at 10 Hz, and no idle timer was added. A real 5-second synthetic 50 Hz native workload reused its surface without reallocations. Full hotkey-to-screen latency remains unmeasured. |
+| Complete distinct dictionary hints | Implemented | Executed regressions cover whole names, whitespace, duplicates, oversized replacements and later smaller terms within the 800-character budget. General speech word-error improvement is not measured. |
+| Audio-gap recovery and review guard | Partially Implemented | A real device gap was reproduced. A forced 300 ms reader overrun now preserves later frames and marks the recording. Engine regression blocks automatic insertion, and interrupted captures skip snippets/AI polishing. Real normal Stop and cancellation passed. Full interrupted speech/transcription/manual review acceptance remains open; missing audio is not recoverable. |

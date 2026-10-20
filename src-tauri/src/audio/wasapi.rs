@@ -21,6 +21,7 @@ impl Apartment {
         Ok(Self)
     }
 }
+
 impl Drop for Apartment {
     fn drop(&mut self) {
         unsafe { CoUninitialize() }
@@ -36,6 +37,8 @@ pub struct Stream {
     float: bool,
     running: bool,
     seen_packet: bool,
+    next_position: Option<u64>,
+    pub gaps: u32,
     selection: String,
     device_id: String,
     enumerator: IMMDeviceEnumerator,
@@ -90,7 +93,7 @@ impl Stream {
                 && value.nSamplesPerSec >= 8000
                 && value.nSamplesPerSec <= 384000
                 && value.nBlockAlign as usize == bytes * value.nChannels as usize;
-            // Keep a 200-ms endpoint buffer, drained every 50 ms only while recording.
+            // Endpoint capacity; available packets are drained every 20 ms.
             let initialized = if valid {
                 client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2_000_000, 0, format, None)
             } else {
@@ -115,6 +118,8 @@ impl Stream {
                 float,
                 running: false,
                 seen_packet: false,
+                next_position: None,
+                gaps: 0,
                 selection: name.to_string(),
                 device_id,
                 enumerator,
@@ -127,6 +132,8 @@ impl Stream {
         })?;
         self.running = true;
         self.seen_packet = false;
+        self.next_position = None;
+        self.gaps = 0;
         Ok(())
     }
     pub fn matches_selection(&self, name: &str) -> bool {
@@ -162,12 +169,40 @@ impl Stream {
                 > 0
             {
                 let (mut pointer, mut frames, mut flags) = (std::ptr::null_mut(), 0, 0);
+                let mut position = 0;
                 self.capture
-                    .GetBuffer(&mut pointer, &mut frames, &mut flags, None, None)
+                    .GetBuffer(
+                        &mut pointer,
+                        &mut frames,
+                        &mut flags,
+                        Some(&mut position),
+                        None,
+                    )
                     .map_err(|_| "Could not read microphone audio. Nothing was sent.")?;
-                // A discontinuity means lost words. Keep the recording from being sent
-                // as if complete; silence has no data pointer and is valid audio.
+                // Preserve the remaining audio after a glitch, but mark the
+                // recording for mandatory review. Never present it as complete.
                 let gap = flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0;
+                let valid_time = flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0;
+                let missing = if valid_time {
+                    self.next_position
+                        .map(|p| position.saturating_sub(p))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                if self.seen_packet && (gap || missing > 0) {
+                    self.gaps = self.gaps.saturating_add(1);
+                    // Silence preserves the time boundary rather than joining
+                    // words across missing audio. Large gaps remain bounded.
+                    for _ in 0..missing.min(self.rate as u64 * 2) {
+                        append(0.0);
+                    }
+                }
+                self.next_position = if valid_time {
+                    Some(position + frames as u64)
+                } else {
+                    None
+                };
                 for frame in 0..frames as usize {
                     let value =
                         if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || pointer.is_null() {
@@ -191,9 +226,6 @@ impl Stream {
                 self.capture
                     .ReleaseBuffer(frames)
                     .map_err(|_| "Could not finish reading microphone audio.")?;
-                if gap && self.seen_packet {
-                    return Err("Windows lost microphone audio during recording. Nothing was sent. Try again or choose another device.".into());
-                }
                 self.seen_packet = true;
             }
         }
@@ -240,6 +272,36 @@ fn decode(bytes: &[u8], float: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Pauses the owned real-microphone reader briefly to check scheduling headroom; no upload or audio file."]
+    fn endpoint_reports_a_scheduler_overrun_instead_of_silent_loss() {
+        let _com = Apartment::enter().unwrap();
+        let mut stream = Stream::open("").unwrap();
+        let buffer = unsafe { stream.client.GetBufferSize().unwrap() };
+        println!(
+            "Endpoint buffer: {} ms",
+            buffer as u64 * 1000 / stream.rate as u64
+        );
+        stream.start().unwrap();
+        let mut frames = 0;
+        let started = std::time::Instant::now();
+        while frames == 0 && started.elapsed() < std::time::Duration::from_secs(3) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            stream.read(|_| frames += 1).unwrap();
+        }
+        assert!(frames > 0);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut retained = 0;
+        let result = stream.read(|_| retained += 1);
+        stream.stop().unwrap();
+        assert!(result.is_ok(), "An audio glitch ended capture: {result:?}");
+        assert!(stream.gaps > 0, "Forced overrun was not marked for review");
+        assert!(
+            retained >= stream.rate as usize / 4,
+            "Remaining audio/time boundary was lost"
+        );
+        println!("Forced overrun marked for review: {}; retained frames including marked silence: {retained}",stream.gaps);
+    }
     #[test]
     fn decodes_native_formats() {
         assert_eq!(decode(&[0, 128], false), -1.0);

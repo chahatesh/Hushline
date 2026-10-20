@@ -121,3 +121,15 @@ On the same Intel i5-1235U / 12 logical processors / 7.7 GiB Windows system, a f
 The actual dashboard heading appeared after 3440 ms including test-only connection overhead. This is not a controlled cold-start comparison. A cold-first-use microphone worker took 666 ms to Ready, followed by 4/6/3 ms on reuse. A separately prepared worker took 8/6/8 ms to Ready and 73/59/61 ms to first frames. Initial Windows/device preparation is not instantaneous, and these observations are not latency guarantees.
 
 The two synthetic Groq text-polish requests took 567 and 671 ms with `openai/gpt-oss-20b`. That is extra editing time, excluding capture, speech recognition and target insertion. Always adds an edit for every ordinary dictation; Sometimes applies deterministic length/cue/style checks; Never makes no automatic text-model request. Exact-word mode and saved snippet expansions bypass automatic editing. A real end-to-end latency distribution is still unmeasured.
+
+## Hush 0.3.1 responsiveness measurements
+
+Same documented hardware, 2026-10-20. Microphone reads now target a 20 ms interval (50 Hz) during capture, with native update messages coalesced and dashboard metering limited to 10 Hz. Processing animation targets 25 Hz. Opening takes 170 ms, notices 220 ms and closing 130 ms, with a fixed lower edge; reduced motion skips the transition. These configured cadences are not measured keypress-to-display latency.
+
+A real native-window synthetic 50 Hz workload delivered **244 readings in 5 seconds**, consuming **0.1719 CPU seconds / 0.286% across 12 logical processors**, with no new drawing surface after warmup. This was a debug test process, not the optimized whole app, and excludes audio/network/dashboard. Surface/DC/pixel buffers are reused at a stable size, the accessible title is cached and idle has no animation timer. No rendering dependency was added.
+
+Real worker observations after the final gap-recovery change: cold-first-use Ready **249 ms**, subsequent normal-stop sessions **6/4/16 ms**; a separately prepared worker reached Ready **8/3/7 ms** and first frames **38/120/42 ms**. Machine/compiler load varied. Initial preparation is not eliminated and a sub-100 ms hardware-wide promise is unsupported.
+
+The public approximately 11-second JFK speech fixture took **1,342 ms** through actual Groq Turbo with a cold HTTP client, returning 22 words. This excludes speaking time, microphone initialization, local layout, optional AI edits and insertion. It is one request, not a controlled before/after speed comparison or a word-error-rate study. Vocabulary hints now retain complete distinct names within the application request budget; general speech accuracy remains unmeasured.
+
+Packet loss was reproduced on the real endpoint and with a forced reader overrun. The app now preserves the remaining recording for mandatory review rather than ending the entire session; it does not reconstruct missing audio or claim to remove the driver/scheduling cause. Such captures skip automatic insertion, snippets and automatic AI editing. No extra cloud/model request was added to the ordinary fast path.

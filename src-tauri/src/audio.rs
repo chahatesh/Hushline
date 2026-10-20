@@ -12,10 +12,12 @@ use std::{
     time::{Duration, Instant},
 };
 mod wasapi;
+const READ_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug)]
 pub enum Event {
     Ready,
+    Warning,
     Meter { level: f32, seconds: f32 },
     Finished(Result<Recording, String>),
 }
@@ -25,6 +27,7 @@ pub struct Recording {
     pub duration_ms: u64,
     pub limit_reached: bool,
     pub encoding_ms: u64,
+    pub gaps: u32,
 }
 pub struct Engine {
     tx: mpsc::Sender<Request>,
@@ -78,6 +81,7 @@ struct Active {
     started: Instant,
     last_packet: Instant,
     limit_reached: bool,
+    gaps: u32,
 }
 impl Active {
     fn read(&mut self, stream: &mut wasapi::Stream) -> Result<(), String> {
@@ -89,6 +93,10 @@ impl Active {
                 power += value * value;
             }
         })?;
+        if stream.gaps > self.gaps {
+            self.gaps = stream.gaps;
+            let _ = self.request.events.send(Event::Warning);
+        }
         let count = self.samples.len() - start;
         if count > 0 {
             self.last_packet = Instant::now();
@@ -203,6 +211,7 @@ fn begin(request: &Start, stream: &mut Option<wasapi::Stream>) -> Result<Active,
         started: Instant::now(),
         last_packet: Instant::now(),
         limit_reached: false,
+        gaps: 0,
     })
 }
 fn finish(
@@ -248,7 +257,7 @@ fn worker(rx: mpsc::Receiver<Request>) {
     let mut active: Option<Active> = None;
     loop {
         let command = if active.is_some() {
-            rx.recv_timeout(Duration::from_millis(50))
+            rx.recv_timeout(READ_INTERVAL)
         } else {
             rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
         };
@@ -377,6 +386,7 @@ fn encode(active: &Active) -> Result<Recording, String> {
         duration_ms: active.samples.len() as u64 * 1000 / active.rate as u64,
         limit_reached: active.limit_reached || active.samples.len() >= active.max,
         encoding_ms: started.elapsed().as_millis() as u64,
+        gaps: active.gaps,
     })
 }
 fn silence_expired(
@@ -610,6 +620,7 @@ mod tests {
             started: Instant::now(),
             last_packet: Instant::now(),
             limit_reached: false,
+            gaps: 0,
         };
         let result = encode(&active).unwrap();
         assert_eq!(result.duration_ms, 125000);

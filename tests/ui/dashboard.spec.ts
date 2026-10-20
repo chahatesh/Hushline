@@ -118,3 +118,18 @@ test('Hush branding and cloud polish policy persist without ambiguity', async ({
   await expect(choices.getByRole('button',{name:/Sometimes/})).toHaveAttribute('aria-pressed','true');
   await page.locator('.polish-choice').screenshot({path:'docs/screenshots/cloud-polish.png',animations:'disabled'});
 });
+
+test('voice bar preview unfolds upward with an anchored base and respects reduced motion', async ({page}) => {
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('tab',{name:'Voice bar',exact:true}).click();
+  const pill=page.locator('.pill-preview');
+  await page.getByRole('button',{name:'Preview active bar',exact:true}).scrollIntoViewIfNeeded();
+  const rest=await pill.evaluate(e=>({y:e.offsetTop,height:e.offsetHeight}));
+  await page.getByRole('button',{name:'Preview active bar',exact:true}).click();
+  await expect(pill).toHaveCSS('height','48px');
+  const active=await pill.evaluate(e=>({y:e.offsetTop,height:e.offsetHeight}));
+  expect(active!.y).toBeLessThan(rest!.y);
+  expect(Math.abs(active!.y+active!.height-rest!.y-rest!.height)).toBeLessThan(1);
+  await expect(pill.getByText('Listening',{exact:true})).toBeVisible();
+});

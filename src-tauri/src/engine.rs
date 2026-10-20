@@ -183,6 +183,9 @@ async fn process(
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
     let started = Instant::now();
+    if session.command && recording.gaps > 0 {
+        return Err("Microphone audio was interrupted. Please repeat the edit command; nothing was changed.".into());
+    }
     let key = if session.settings.provider == "groq" {
         Some(native::read_key()?)
     } else {
@@ -191,17 +194,7 @@ async fn process(
     let dictionary: Vec<Entry> = state.store.get("dictionary")?;
     let snippets: Vec<Snippet> = state.store.get("snippets")?;
     let styles: Vec<Style> = state.store.get("styles")?;
-    let hints = dictionary
-        .iter()
-        .map(|e| {
-            if e.replacement.is_empty() {
-                e.source.as_str()
-            } else {
-                e.replacement.as_str()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
+    let hints = text::vocabulary_hint(&dictionary);
     let speech = if let Some(key) = key.as_ref() {
         state
             .groq
@@ -222,9 +215,12 @@ async fn process(
     if spoken.trim().is_empty() {
         return Err("No speech was returned. Nothing was inserted.".into());
     }
-    let target = session.target.unwrap_or_else(|| {
-        Err("The original field could not be inspected in time. Transcript preserved.".into())
-    });
+    let target = review_capture_target(
+        session.target.unwrap_or_else(|| {
+            Err("The original field could not be inspected in time. Transcript preserved.".into())
+        }),
+        recording.gaps,
+    );
     let mut output = text::normalize(&spoken, &local_mode, &dictionary);
     let mut preview = false;
     let mut original = None;
@@ -234,6 +230,12 @@ async fn process(
     } else {
         String::new()
     };
+    if recording.gaps > 0 {
+        if !warning.is_empty() {
+            warning.push(' ');
+        }
+        warning.push_str("Microphone audio briefly dropped. Available speech was kept. Review this transcript before copying; automatic paste was skipped.");
+    }
     let _encoding_ms = recording.encoding_ms;
     if session.command {
         if !session.settings.selection_permission {
@@ -256,7 +258,11 @@ async fn process(
         .await?;
         original = Some(t.selected.clone());
         preview = true;
-    } else if let Some((expanded, confirm)) = text::expand(&output, &snippets) {
+    } else if let Some((expanded, confirm)) = if recording.gaps == 0 {
+        text::expand(&output, &snippets)
+    } else {
+        None
+    } {
         output = expanded;
         preview = confirm;
     } else {
@@ -270,12 +276,14 @@ async fn process(
         } else {
             None
         };
-        if text::should_polish(
-            &output,
-            &session.settings.polish_policy,
-            &session.settings.mode,
-            style.is_some_and(|s| s.enhanced),
-        ) {
+        if recording.gaps == 0
+            && text::should_polish(
+                &output,
+                &session.settings.polish_policy,
+                &session.settings.mode,
+                style.is_some_and(|s| s.enhanced),
+            )
+        {
             let _ = state.tx.send(Message::Polishing(session.id));
             let instruction = format!(
                 "{} {}",
@@ -330,6 +338,33 @@ async fn process(
         settings: session.settings,
         warning,
     })
+}
+
+fn review_capture_target<T>(target: Result<T, String>, gaps: u32) -> Result<T, String> {
+    if gaps > 0 {
+        Err("Automatic insertion was blocked because microphone audio was interrupted.".into())
+    } else {
+        target
+    }
+}
+
+#[cfg(test)]
+mod capture_quality_tests {
+    use super::*;
+    #[test]
+    fn interrupted_audio_never_retains_an_automatic_insertion_target() {
+        let authorized = Ok::<_, String>("authorized editable field");
+        assert_eq!(
+            review_capture_target(authorized.clone(), 0).unwrap(),
+            "authorized editable field"
+        );
+        for gaps in [1, 2, 100] {
+            assert!(review_capture_target(authorized.clone(), gaps)
+                .unwrap_err()
+                .contains("blocked"));
+        }
+        assert!(review_capture_target::<()>(Err("Focus changed".into()), 0).is_err());
+    }
 }
 
 async fn rewrite(
@@ -444,6 +479,7 @@ async fn actor(
     let mut cancellation = CancellationToken::new();
     let mut pending: Option<Pending> = None;
     let mut last_tap: Option<Instant> = None;
+    let mut last_dashboard_meter: Option<Instant> = None;
     while let Some(message) = rx.recv().await {
         match message {
             Message::Polishing(id) => {
@@ -691,12 +727,31 @@ async fn actor(
                     }
                 }
             }
-            Message::Audio(id, audio::Event::Meter { level, seconds }) => {
+            Message::Audio(id, audio::Event::Warning) => {
                 if id == generation {
                     publish(&app, &state, |v| {
-                        v.level = level;
-                        v.seconds = seconds;
+                        v.warning="Audio briefly dropped. Keep speaking; the transcript will be saved for review instead of pasted automatically.".into()
                     });
+                }
+            }
+            Message::Audio(id, audio::Event::Meter { level, seconds }) => {
+                if id == generation {
+                    let mut v = state.view.lock().unwrap();
+                    if v.phase != "listening" {
+                        continue;
+                    }
+                    v.level = level;
+                    v.seconds = seconds;
+                    native::update_overlay(&v);
+                    // The native voice bar gets every reading. The settings
+                    // webview needs fewer IPC updates and no hidden rendering.
+                    if app.get_webview_window("main").is_some()
+                        && last_dashboard_meter
+                            .is_none_or(|t| t.elapsed() >= Duration::from_millis(100))
+                    {
+                        let _ = app.emit_to("main", "dictation", v.clone());
+                        last_dashboard_meter = Some(Instant::now());
+                    }
                 }
             }
             Message::Audio(id, audio::Event::Finished(result)) => {
@@ -784,21 +839,19 @@ async fn actor(
                                     )
                                 })
                                 .await;
-                                let (inserted, warning) = match result {
-                                    Ok(Ok(message)) => (
-                                        true,
-                                        [done.warning.as_str(), message.as_str()]
-                                            .into_iter()
-                                            .filter(|v| !v.is_empty())
-                                            .collect::<Vec<_>>()
-                                            .join(" "),
-                                    ),
+                                let (inserted, message) = match result {
+                                    Ok(Ok(message)) => (true, message),
                                     Ok(Err(e)) => (false, e),
                                     _ => (
                                         false,
                                         "Insertion worker failed. Transcript preserved.".into(),
                                     ),
                                 };
+                                let warning = [done.warning.as_str(), message.as_str()]
+                                    .into_iter()
+                                    .filter(|v| !v.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
                                 let _ = tx.send(Message::Delivered(
                                     id,
                                     Box::new(done),
