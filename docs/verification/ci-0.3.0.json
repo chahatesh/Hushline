@@ -1,0 +1,9 @@
+{
+  "version": "0.3.0",
+  "implementationCommit": "f4a464d6d2cfc329ce1ec9148187de0065da785b",
+  "runId": 39415266772,
+  "url": "https://github.com/chahatesh/Hushline/actions/runs/39415266772",
+  "conclusion": "success",
+  "recordedAt": "2026-10-20T11:36:17.984Z",
+  "scope": "Hosted Windows lint, unit/browser checks, real offline fixture, NSIS installer, portable build and artifact upload. Does not verify interactive microphone-to-target acceptance."
+}

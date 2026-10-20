@@ -138,3 +138,5 @@ The first installer test correctly refused a collision with an existing unrelate
 The new installer and portable ZIP were built. The final background benchmark measured 18.89 MiB mean/peak working set, 4.07 MiB private memory and CPU rounded to 0.000% across 12 logical processors. See [native desktop](verification/desktop-smoke-0.3.0.json), [installer coexistence](verification/installer-test-0.3.0.json), [performance](verification/performance-0.3.0.json) and [formatting checks](verification/formatting-0.3.0.json).
 
 The source is public. Live microphone → Groq → target insertion, real clipboard restoration, selected-text edits, long live speech, multi-monitor acceptance and an independent manual build remain open. No release tag or GitHub Release is published.
+
+Final hosted Windows CI passed for implementation commit f4a464d, including lint, tests, real offline speech fixture, installer packaging and portable artifact upload: https://github.com/chahatesh/Hushline/actions/runs/39415266772. Documentation-only commits do not alter that tested implementation.
