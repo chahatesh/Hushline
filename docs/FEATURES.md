@@ -8,7 +8,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Genuine MIT license | Implemented | Complete standard license; Copyright (c) 2026 Chahatesh; SPDX source headers. Third-party terms preserved. |
 | Rust/Tauri 2/Solid modular architecture | Implemented | Native compilation and unit tests, production frontend build, actual Tauri IPC smoke test. |
 | No Hushline account, subscription, artificial app quota, or telemetry | Implemented | No account/analytics service or app usage gate exists; reviewed source. Groq account terms still apply. |
-| Native WASAPI microphone capture | Partially Implemented | CPAL stream, actual-device smoke test provided; see QA for measured execution result. |
+| Native WASAPI microphone capture | Partially Implemented | Stopped native-client preparation, actual frames/cancellation and normal Stop passed. More devices and full microphone-to-target compatibility remain unverified. |
 | Microphone enumeration and selection | Partially Implemented | Native enumeration plus dashboard selector; duplicate device names are not disambiguated by stable ID. |
 | Voice activity detection / sustained silence | Partially Implemented | Energy threshold and duration bounds implemented. Quiet/noisy room validation and semantic speech detection remain incomplete. |
 | In-memory WAV, 16 kHz mono, anti-alias resampling | Implemented | Duration, DC preservation, silence, and high-frequency attenuation tests pass; no raw-audio disk writes. |

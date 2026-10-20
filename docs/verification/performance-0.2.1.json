@@ -1,0 +1,100 @@
+{
+  "measuredAt": "2026-10-20T01:00:32.4484818Z",
+  "binarySha256": "9329FA28ADB8CA71F6D015C569FADD58979F455C175D9374B63CE7CE35CC9A69",
+  "configuration": "release, background tray, no webviews created, resting native dock visible; no offline model resident; stopped microphone client prepared, no idle audio reads",
+  "cpu": "12th Gen Intel(R) Core(TM) i5-1235U",
+  "logicalProcessors": 12,
+  "systemMemoryGB": 7.7,
+  "os": "Microsoft Windows NT 10.0.26300.0",
+  "warmupSeconds": 5,
+  "sampleSeconds": 21.8174928,
+  "meanWorkingSetMB": 18.95,
+  "peakWorkingSetMB": 18.95,
+  "meanPrivateMB": 4.16,
+  "cpuPercentAllLogicalProcessors": 0,
+  "startupToUsableUI": "not measured by this background benchmark",
+  "transcriptionLatency": "Public cold-client Groq fixture 2542 ms in update-0.2.1.json; live microphone-to-application latency remains unmeasured",
+  "samples": [
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    },
+    {
+      "workingSetMB": 18.95,
+      "privateMB": 4.16
+    }
+  ],
+  "version": "0.2.1"
+}

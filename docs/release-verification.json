@@ -1,9 +1,9 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-19T23:54:42.6694110Z",
-  "evidence": "docs/QA.md and docs/verification/*0.2.0.json. Guarded per-user silent install/background launch/uninstall and native dashboard checks passed. Existing credential was preserved. Live microphone-to-Notepad acceptance, real clipboard insertion/restoration, selected-text editing, and an independent clean-machine build remain unverified; the release gate stays closed.",
+  "testedAt": "2026-10-20T01:00:32.4484818Z",
+  "evidence": "docs/verification/*0.2.1.json and docs/QA.md. Installer/background launch/uninstall, actual native dashboard, stopped-client starts, cancellation/normal Stop and a saved-key public Groq speech fixture passed. Live microphone-to-Notepad, actual insertion/clipboard restoration and selected-text editing remain unverified. The release gate stays closed.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,

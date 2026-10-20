@@ -68,5 +68,18 @@
     "Mixed-DPI/multi-monitor behavior",
     "General AI meaning preservation and production local-edit acceptance",
     "Independent clean-machine installation acceptance"
-  ]
+  ],
+  "packaged": {
+    "executableBytes": 7715328,
+    "executableSha256": "9329fa28adb8ca71f6d015c569fadd58979f455c175d9374b63ce7ce35cc9a69",
+    "installerBytes": 2802071,
+    "installerSha256": "f46ffcd21950079f5590bb33c570a3937e6dc510acc7c0d5f45c4f2aec325bc7",
+    "portableSha256": "231c080b1bbaaee906fe488227d508d3dd48a937277bd6477a7cad5de14b171a",
+    "nativeDesktop": "passed; existing key preserved; normal microphone Stop rejects silence safely without upload",
+    "silentInstallLaunchUninstall": "passed; profile retained",
+    "meanIdleWorkingSetMiB": 18.95,
+    "meanIdlePrivateMiB": 4.16,
+    "idleCpuPercentAllLogicalProcessors": 0,
+    "desktopHeadingObservedMs": 6381
+  }
 }

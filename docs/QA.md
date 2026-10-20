@@ -111,3 +111,13 @@ A **real Groq** request using the saved key transcribed the public upstream JFK 
 The qwen3:0.6b feasibility benchmark used synthetic text, a separate cloud-disabled service and workspace-only weights; it measured significant active RAM and 3–15 s edits. Its service was stopped. The longer fixture did not gain paragraphs. See LOCAL_MODEL.md and verification/local-model-0.2.1.json; this trial does not establish broad model quality.
 
 The previous hosted run passed its functional checks, real offline fixture and installer build, then failed because its child PowerShell could not resolve Get-FileHash during portable packaging. The portable script now uses standard .NET SHA-256 directly. No failure was relabeled as success; the next hosted result and packaged-runtime evidence are recorded below when available. No release tag is created while core acceptance is open.
+
+### Packaged 0.2.1 result
+
+The optimized executable (7,715,328 bytes) and NSIS installer (2,802,071 bytes) built successfully. The portable ZIP and its .NET SHA-256 calculation also completed.
+
+The actual release dashboard passed secret exclusion, dictionary add/reload/delete, key preservation, microphone cancellation, normal Stop/final-frame drain with safe silence rejection, backup exclusion, close-to-tray and reopen. Neither microphone test uploaded audio or added history. Observed heading time was 6381 ms including test-only CDP overhead. The native screenshot masks private history/statistics.
+
+Guarded per-user silent install, background launch, dependency-license presence, uninstall and retained profile passed in a new owned directory. The interactive wizard and update matrix remain unverified. Fresh-background memory averaged 18.95 MiB working set and 4.16 MiB private; CPU rounded to 0.000% across all processors. These are one-run observations, not hardware-wide guarantees.
+
+Reports: [native desktop](verification/desktop-smoke-0.2.1.json), [installer](verification/installer-test-0.2.1.json), [performance](verification/performance-0.2.1.json), [update](verification/update-0.2.1.json). The source was published in commits 8544c35 and aef7f55. Live microphone-to-target, clipboard restoration after real insertion, full local-edit quality, long live speech, mixed-DPI monitors and independent manual installation remain open. No GitHub Release was published.

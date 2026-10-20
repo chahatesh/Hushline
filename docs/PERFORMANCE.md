@@ -101,3 +101,16 @@ One actual Groq Turbo request processed the approximately 11-second public JFK f
 Paste completion now acknowledges dispatch before the conservative 600-ms restoration job finishes. Restoration still retains its owner and sequence-number guards. This removes a fixed wait from completion UI; receiving-application timing is not verified because Windows refused the test harness's foreground acquisition.
 
 The small local text-model trial added 3,403–14,616 ms and substantial active memory; it is kept optional. See LOCAL_MODEL.md for cache/load/quality and memory-pressure limits. The final packaged background measurement is recorded below; 15.94 MiB in the prior section is the 0.2.0 baseline.
+
+### Packaged 0.2.1 background run
+
+Measured 2026-10-20T01:00:32.4484818Z (2026-10-19 evening in America/New_York), after compiler/test jobs finished. Binary SHA-256: `9329FA28ADB8CA71F6D015C569FADD58979F455C175D9374B63CE7CE35CC9A69`. The resting pill and stopped microphone preparation were enabled; no webview or local inference model was resident. Five seconds of warmup preceded 20 samples over 21.82 seconds.
+
+| Measurement | Result |
+| --- | --- |
+| Mean / peak working set | **18.95 / 18.95 MiB** |
+| Mean private memory | **4.16 MiB** |
+| CPU across all 12 logical processors | **0.000% at the sampling resolution** |
+| Dashboard launch-to-heading observation | **6381 ms**, including test-only CDP setup |
+
+This single fresh-background run excludes the open dashboard, active recording/encoding, local-model inference and shared Windows audio-service memory. The dashboard observation is not a pure cold-start measurement or an improvement claim; it includes test connection overhead and varied machine/cache load. Zero after rounding is not literally no CPU work. See [background data](verification/performance-0.2.1.json).
