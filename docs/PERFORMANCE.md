@@ -6,7 +6,9 @@ No end-to-end transcription latency, under-100 MB idle footprint, or sub-100 ms 
 
 Local implementation/testing on Windows NT 10.0.26300.0, x64, Intel Core i5-1235U, 12 logical processors, 7.7 GiB reported physical memory. The Rust compiler reports stable 1.99.1/MSVC; Node 22.14.0. Microsoft compiler/SDK files were extracted into the ignored workspace-local tools directory. The build was running during early smoke tests; those samples are not a quiet-machine benchmark. CPU/RAM and version information are recorded by `scripts/benchmark.ps1` when an optimized executable is available.
 
-## Recorded results
+## Initial 0.1.0 development observations
+
+These are historical observations from initial implementation. Current-revision measurements and their limits appear at the end of this report.
 
 | Measurement | Result | Scope / limitation |
 | --- | --- | --- |
@@ -25,7 +27,7 @@ Local implementation/testing on Windows NT 10.0.26300.0, x64, Intel Core i5-1235
 - Rust owns the critical path; the settings UI does not mediate recording or HTTP calls.
 - Keyboard/mouse and focus notifications are event-driven. No idle microphone stream or continuous animation loop runs.
 - The dashboard webview is created on demand and destroyed on close. Background startup creates no webviews. A hidden native GDI popup provides the overlay, without WebView2.
-- Audio capture buffers are bounded/preallocated; samples are downmixed in the callback. Energy metering is limited to 20 Hz while recording.
+- Audio capture buffers are bounded/preallocated; native packets are downmixed on the audio thread. Since 0.3.1 the native meter targets 50 Hz while recording and dashboard messages are limited to 10 Hz.
 - Microphone startup is explicitly labeled “Starting microphone” until the stream reports ready; early cancellation is checked before activation.
 - A 32-tap, 256-phase windowed-sinc table avoids per-output-sample sine/cosine work during resampling. Signal-quality regression tests cover duration, DC preservation, and rejection above the output Nyquist frequency. No unsupported speedup ratio is claimed.
 - Short recordings use 16 kHz mono 16-bit WAV in memory, avoiding encoding subprocesses and temporary audio files. Maximum length is bounded; no chunking is implemented.
@@ -47,7 +49,7 @@ For meaningful latency results, separately record cold/warm microphone activatio
 
 ## Remaining performance work
 
-Profile the observed slow microphone initialization before changing ownership/lifetime of WASAPI resources. Investigate safe descriptor/configuration warmup and stable device IDs without silently keeping a microphone stream open. Verify dashboard release/reopen memory behavior and mixed-DPI overlay latency. The under-100 MB target remains a target until the entire process tree is measured.
+Extend device/driver coverage for stopped-client preparation and packet-gap recovery. Verify complete speech-to-target timing and physical mixed-DPI overlay behavior. Fresh-background measurements meet the memory target on this machine; dashboard/inference sessions and broader hardware need separate measurements.
 
 ## 0.1.0 baseline native-overlay measurements
 
@@ -133,3 +135,9 @@ Real worker observations after the final gap-recovery change: cold-first-use Rea
 The public approximately 11-second JFK speech fixture took **1,342 ms** through actual Groq Turbo with a cold HTTP client, returning 22 words. This excludes speaking time, microphone initialization, local layout, optional AI edits and insertion. It is one request, not a controlled before/after speed comparison or a word-error-rate study. Vocabulary hints now retain complete distinct names within the application request budget; general speech accuracy remains unmeasured.
 
 Packet loss was reproduced on the real endpoint and with a forced reader overrun. The app now preserves the remaining recording for mandatory review rather than ending the entire session; it does not reconstruct missing audio or claim to remove the driver/scheduling cause. Such captures skip automatic insertion, snippets and automatic AI editing. No extra cloud/model request was added to the ordinary fast path.
+
+### Packaged 0.3.1 background run
+
+After compilation and packaged runtime checks ended, a fresh release process with its resting native pill and stopped microphone preparation used **18.99 MiB mean/peak working set** and **4.09 MiB private memory**. CPU rounded to **0.000%** across 12 logical processors during 20 samples over 34.79 seconds, after a five-second warmup. There was one process, no dashboard webview and no local model. Binary SHA-256: `1048f1638557ebfc8344b823aea2b3100275ea226a2780db61e43be65a7eabe7`. [Full sample record](verification/performance-0.3.1.json).
+
+This one background observation is close to the prior 18.89 MiB result, not evidence of a lower idle footprint. Drawing-resource reuse reduces steady animation allocations; no controlled before/after CPU study or end-to-end latency distribution was performed. Recording buffers, encoding, shared audio services, the dashboard and inference add memory outside this measurement. Rounded zero CPU is not literally zero instructions. Actual dashboard heading observation was **3,360 ms**, including test-only CDP overhead, not a controlled cold-start result.

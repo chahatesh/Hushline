@@ -1,0 +1,23 @@
+{
+  "version": "0.3.1",
+  "implementationCommit": "e2810133ce869605f318be0b1e81330b6ee5e834",
+  "builtAt": "2026-10-20T23:43:14.2015533Z",
+  "configuration": "Optimized Windows x64; NSIS per-user; unsigned pre-release; manual speech-to-target acceptance pending",
+  "artifacts": [
+    {
+      "name": "hushline.exe",
+      "bytes": 7739392,
+      "sha256": "1048f1638557ebfc8344b823aea2b3100275ea226a2780db61e43be65a7eabe7"
+    },
+    {
+      "name": "Hush_0.3.1_x64-setup.exe",
+      "bytes": 2810331,
+      "sha256": "b44382f9708754e7343fed5da02a8b2f5447fccb0fd672ece50a2336bc22cabb"
+    },
+    {
+      "name": "Hush_0.3.1_x64_portable.zip",
+      "bytes": 3544628,
+      "sha256": "7896a8006c8096610d1a26a02abdc028f70b4ed03bab13a44f79e573daa7b87f"
+    }
+  ]
+}

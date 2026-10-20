@@ -2,10 +2,10 @@
   "version": "0.3.1",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-20T23:26:00Z",
-  "evidence": "docs/verification/*0.3.1.json and docs/QA.md. Unified native overlay painting/anchors/reuse, microphone normal Stop/cancel, forced audio-gap recovery with insertion blocking, and the public Groq speech fixture passed. Packaged checks are recorded separately when executed. Live microphone-to-target insertion, clipboard restore and command selection acceptance remain unverified. The public release gate stays closed.",
+  "testedAt": "2026-10-20T23:43:38Z",
+  "evidence": "docs/verification/*0.3.1.json and docs/QA.md. Unified native overlay painting/anchors/reuse, microphone normal Stop/cancel, forced audio-gap recovery with insertion blocking, public Groq speech fixture, packaged UI/profile/key preservation, installer coexistence/uninstall, background measurement and hosted Windows CI passed. Live microphone-to-target insertion, clipboard restore and command selection acceptance remain unverified. The public release gate stays closed.",
   "checks": {
-    "installLaunch": false,
+    "installLaunch": true,
     "saveKey": false,
     "selectMicrophone": false,
     "pushToTalkNotepad": false,

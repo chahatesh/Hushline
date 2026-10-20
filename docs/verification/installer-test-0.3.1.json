@@ -1,0 +1,11 @@
+{
+    "installed":  true,
+    "launchedBackground":  true,
+    "dependencyLicensesPresent":  true,
+    "uninstalled":  true,
+    "legacyHushRegistrationAndShortcutsPreserved":  true,
+    "profileRetained":  true,
+    "target":  "C:\\Users\\killa\\Hush\\artifacts\\installer-smoke-0.3.1",
+    "interactiveWizard":  "not tested",
+    "liveDictation":  "not tested"
+}

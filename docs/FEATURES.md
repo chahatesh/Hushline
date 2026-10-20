@@ -57,9 +57,9 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Automatic signed updater / update checks | Not Implemented | Manual trusted installer updates only. |
 | Diagnostics / benchmark report | Partially Implemented | Local test reports, history timing, and process-tree measurement script. Actual measured results and gaps are in PERFORMANCE.md. No in-app diagnostic bundle or update service. |
 | Public repository / downloadable GitHub Release | Partially Implemented | Public repository created at https://github.com/chahatesh/Hushline. Source publication and hosted checks are tracked in QA; no unverified GitHub Release is published. |
-| CI/CD workflows | Partially Implemented | Hosted 0.3.0 lint/test/build, real offline fixture, installer and portable artifact generation passed. Current-revision run is tracked in QA. Release automation remains gated by incomplete manual acceptance. |
+| CI/CD workflows | Partially Implemented | Hosted 0.3.1 lint/test/build, real offline fixture, installer and portable artifact generation passed. Run/commit evidence is in QA. Release automation remains gated by incomplete manual acceptance. |
 | Broad real Windows application compatibility | Not Implemented | No universal compatibility claim. Required live Notepad/browser/Office/editor/chat matrix remains open. |
-| Performance engineering targets | Partially Implemented | Event-driven architecture, bounded buffers, reused HTTP client, opt-in AI, released dashboard. The 0.3.0 fresh-background run measured 18.89 MiB working set, 4.07 MiB private, rounded 0% CPU. Current measurements are in PERFORMANCE.md. No live speech latency claim. |
+| Performance engineering targets | Partially Implemented | Event-driven architecture, bounded buffers, reused HTTP client, opt-in AI, released dashboard. The 0.3.1 fresh-background run measured 18.99 MiB working set, 4.09 MiB private, rounded 0% CPU. Measurement limits are in PERFORMANCE.md. No live speech latency claim. |
 
 The decisive missing evidence is an uninterrupted real user session: install → enter a valid Groq key → choose a microphone → focus Notepad → hold/speak/release → correct text in the original field, followed by the same workflow's cancellation, focus-change, private-mode, clipboard, and command-edit checks.
 
