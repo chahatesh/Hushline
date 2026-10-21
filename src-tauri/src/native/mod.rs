@@ -2,6 +2,8 @@
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod cue;
+#[cfg(windows)]
 mod hooks;
 #[cfg(windows)]
 mod overlay;
@@ -9,6 +11,8 @@ mod overlay;
 mod windows;
 #[cfg(windows)]
 pub use clipboard::copy_text;
+#[cfg(windows)]
+pub use cue::play_recording_cue;
 #[cfg(windows)]
 pub use hooks::{input_epoch, set_active, shortcut_capture, start_hooks, update_shortcuts};
 #[cfg(windows)]
@@ -28,4 +32,11 @@ pub struct Target {
     pub app: String,
     pub epoch: u64,
     pub terminal: bool,
+}
+
+/// An explicitly requested, transient copy of one editable field. Never persisted.
+#[derive(Debug, Clone)]
+pub struct WholeFieldSnapshot {
+    pub target: Target,
+    pub original: String,
 }

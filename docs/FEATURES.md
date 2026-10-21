@@ -1,6 +1,6 @@
 # Feature status
 
-Status describes this revision, not a promise of commercial equivalence. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
+Status describes the 0.4.0 revision, not a promise of commercial equivalence. Versioned tables preserve earlier evidence; current behavior and open 0.4.0 checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
 
 | Requested feature | Status | Evidence / limit |
 | --- | --- | --- |
@@ -25,19 +25,19 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Model discovery and configurable Groq text models | Partially Implemented | Native discovery/cache and dashboard configuration exist; live account model availability unverified. |
 | Default fast path without extra AI call | Implemented | Default-settings tests and reviewed branch logic. Literal mode bypasses AI even if an enhanced flag is set. |
 | Conservative fillers, repeated articles, weekday self-corrections | Implemented | Regression tests preserve meaningful “had had”, “you know”, identifiers, URLs, and ambiguous revisions. Repairs are intentionally narrow. |
-| General false starts, arbitrary self-corrections | Partially Implemented | Optional AI processing can handle them; no reliable local general semantic repair. |
+| General false starts, arbitrary self-corrections | Partially Implemented | Explicit corrections have stronger local handling and corrected-meaning AI validation in 0.4.0. Ambiguous wording is preserved; arbitrary semantic repair and universal accuracy are not claimed. |
 | Local punctuation, paragraphs, bullets | Implemented | English-only explicit commands plus tested automatic notes, ordered cue lists and sentence-based paragraphs. Literal mode and technical identifiers are preserved; broad semantic layout detection remains limited. |
-| Numbered lists, dates, times, common-number normalization | Not Implemented | No dedicated reliable local grammar. Optional AI can format text, but is not counted as verified support. |
-| Email/technical writing, Literal/Clean/Polished modes | Partially Implemented | Modes/presets exist; literal/local transformations tested, live polished quality and meaning preservation unverified. |
+| Numbered output, dates, times, common-number normalization | Partially Implemented | Numbered spoken cues can establish bullet-list items. Dedicated numbered-output/date/time normalization is not implemented; optional AI formatting is not counted as universal verified grammar. |
+| Casual/Standard/Formal writing and advanced exact words | Partially Implemented | Independent style/AI choices and migration pass UI/unit checks. Local rules are English and conservative; stronger Formal rewriting requires AI. Full live writing quality/meaning preservation remains unverified. |
 | Native accessibility protection and target/caret identity | Partially Implemented | Fail-closed UIA checks and equality tests exist. Interactive test could not acquire foreground focus in this execution environment. |
 | Password and read-only blocking | Partially Implemented | Native checks exist; real protected-control test did not reach its assertions because focus acquisition was refused. |
 | Unicode system-wide insertion | Partially Implemented | Compiles; actual delivery into Notepad, browsers, Office, chat apps, and editors remains unverified. |
 | Guarded clipboard paste, restoration, newer-copy protection | Partially Implemented | Snapshot/sequence logic implemented. Interactive test blocked before insertion; asynchronous consumer timing and all formats unverified. |
-| Direct accessibility text mutation | Not Implemented | UIA inspects targets; delivery defaults to clipboard paste, with opt-in compatibility typing. Whole-value replacement is deliberately avoided. |
+| Approved whole-field native/accessibility replacement | Partially Implemented | Improve prompt can replace one unchanged original field after edited-preview approval. Complete field/protection/identity checks apply; real target compatibility remains pending. Ordinary dictation still defaults to guarded paste, with opt-in typing. |
 | Terminal dictation | Partially Implemented | Transcript recovery available; automatic terminal insertion deliberately blocked. Integrated terminal detection/compatibility remains a limitation. |
 | Floating overlay states / waveform / no focus activation | Partially Implemented | A native Win32/GDI overlay passed show/hide/nonactivation and initial-paint tests. Hotkey feedback timing and multi-monitor validation remain unverified. |
 | Dark/light/system, high DPI, reduced motion | Partially Implemented | Themes/responsive layout tested in browser. Native DPI/mixed-monitor testing pending; reduced-motion CSS present. |
-| Optional quiet sounds | Not Implemented | No sounds shipped. |
+| Optional quiet recording-ready sound | Partially Implemented | Original quiet cue and on/off setting added. Trigger is first microphone frames, after preparation; audible live/device acceptance remains pending. |
 | Full nine-section dashboard | Implemented | Browser interaction tests and the actual native IPC smoke test pass; screenshots reviewed. Live dictation acceptance remains open. |
 | Home status, shortcut, microphone, model, recent usage | Partially Implemented | Status/shortcut/device/recent usage present. Speech model is selected in Settings rather than displayed as a dedicated Home field. |
 | Local history search/copy/recovery/delete/export/timestamps/app | Partially Implemented | SQLite persistence/deletion and browser UI tested. Native IPC and real app attribution unverified. Latest 1,000 records loaded/exported. |
@@ -48,14 +48,14 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Scratchpad and export | Implemented | Save/reload and word-count tests pass in browser; native storage contract covered by SQLite tests. |
 | Statistics | Implemented | Real retained-history calculations, empty-state and zero-usage tests. No fabricated usage, no lifetime claims. |
 | Context executable detection | Partially Implemented | Windows process lookup and optional style matching exist; real app compatibility unverified. |
-| Browser-domain matching / nearby text permission | Not Implemented | No screenshots, domains, or surrounding text are collected. |
+| Browser-domain matching / automatic nearby text | Not Implemented | No screenshots, domains, or automatic surrounding text are collected. Explicit selected-text Command Mode and whole-field Improve prompt are separate authorized actions. |
 | Command Mode selected text + Groq edit + preview + guarded replace | Partially Implemented | Opt-in selection and preview logic, truncated-response test implemented. End-to-end selection/edit/replacement unverified. |
 | Credential Manager secure key storage | Partially Implemented | Native OS-backed storage, earlier dummy-key round-trip and Tauri key-entry/removal passed. Saved real key authenticated the public Groq fixture and was preserved. Independent upgrade/manual acceptance remains open. |
 | Configuration backup/restore | Implemented | UI export/exclusion and transactional invalid-restore rollback tested. Keys/history/scratchpad excluded. |
 | Tray, close/reopen, optional startup, single instance | Partially Implemented | Actual desktop close-to-tray and reopen passed, as did installed background launch/uninstall. Startup opt-in and upgrades still need manual checks. |
 | Windows installer and portable artifact | Partially Implemented | Packaging configuration/scripts exist; consult QA for generated artifact/build result. Silent install/background launch/uninstall passed; interactive wizard and upgrades pending. |
 | Automatic signed updater / update checks | Not Implemented | Manual trusted installer updates only. |
-| Diagnostics / benchmark report | Partially Implemented | Local test reports, history timing, and process-tree measurement script. Actual measured results and gaps are in PERFORMANCE.md. No in-app diagnostic bundle or update service. |
+| Diagnostics / benchmark report | Partially Implemented | Bounded memory-only stage timings/outcomes can be explicitly exported; no audio/text/key data. Historical and current measured results are in PERFORMANCE.md. No automatic upload or update service. |
 | Public repository / downloadable GitHub Release | Partially Implemented | Public repository created at https://github.com/chahatesh/Hushline. Source publication and hosted checks are tracked in QA; no unverified GitHub Release is published. |
 | CI/CD workflows | Partially Implemented | Hosted 0.3.2 lint/test/build, real offline fixture, installer and portable artifact generation passed. Run/commit evidence is in QA. Release automation remains gated by incomplete manual acceptance. |
 | Broad real Windows application compatibility | Not Implemented | No universal compatibility claim. Required live Notepad/browser/Office/editor/chat matrix remains open. |
@@ -126,3 +126,21 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Encrypted failed-audio recovery | Partially Implemented | Windows DPAPI/SQLite restart, corruption, retention, expiry and memory-only private tests. Home exposes Retry/Delete; complete live microphone → timeout → retry flow awaits manual acceptance. |
 | Retry avoids old insertion target | Partially Implemented | New generation has no target/selection; recovered text is copy-only. Live target application acceptance remains open. |
 | Bounded optional AI editing | Partially Implemented | Five-second cleanup limit falls back locally; ten-second command-edit limit fails safely. Live provider timeout acceptance remains open. |
+
+## 0.4.0 reliable recording and writing
+
+| Feature | Status | Evidence / limit |
+| --- | --- | --- |
+| Configurable startup pause and first-frame readiness | Partially Implemented | Default 300 ms, range 0–1,500; dark preparation and five-second microphone-start bound. Abandoned holds must not start later. Live hardware/release acceptance remains pending. |
+| Recording-ready cue and recording-only bright waveform | Partially Implemented | Sound preference and state presentation exist; browser checks verify preference persistence. Audible cue timing and real microphone-driven display remain subject to native/live acceptance. |
+| Timer left, × right; side timer above | Partially Implemented | Browser geometry checks pass, including centered side preview and reduced motion. Native physical mixed-DPI/manual acceptance remains open. |
+| Retained pending target inspection and bounded delivery | Partially Implemented | Processing carries the original target inspection; insertion remains guarded with a two-second delivery bound. Delayed inspection, dashboard/copy invalidation, cancellation, and no-late-paste behavior need the recorded native/live checks in QA. |
+| Casual/Standard/Formal selection independent of AI policy | Implemented | Executed UI/unit checks verify style choice, Always/Sometimes/Never independence, exact-word override, schema-5 migration, and preservation of existing settings. Stronger Formal AI quality is separately partial. |
+| Explicit correction chains and corrected-meaning AI guard | Partially Implemented | Local supported corrections and protected-content validation are implemented with regression cases. Ambiguous wording remains conservative; full live speech/model-quality acceptance remains open. |
+| List introductions, numbered cues, multi-sentence items, mixed prose | Partially Implemented | Local parser has targeted regression coverage and keeps ordinary conjunctions conservative. Universal semantic layout and live recognizer/model accuracy are not claimed. |
+| Mode-specific cloud/local AI instructions and local fallback | Partially Implemented | Instructions request concise, meaning-preserving output and distinguish Casual/Standard/Formal. Five-second automatic-cleanup fallback remains. Actual quality across languages/models needs further evaluation. |
+| Shortcut-only Improve prompt: whole focused field | Partially Implemented | Default Ctrl+Win+P, no microphone, complete editable-field read up to 32,000 UTF-8 bytes with no truncation. Protected/read-only/terminal/unsupported inputs are refused. Live application support and end-to-end acceptance remain pending. |
+| Clarify/Expand, editable preview, approved replacement | Partially Implemented | Action preference and shortcut persistence pass browser checks. Twenty-second AI deadline; output up to 100,000 UTF-8 bytes. Apply rechecks identity/full original text; changed targets keep a copyable proposal. Native/live replacement and provider quality remain pending. |
+| Transient prompt privacy and bounded stage metadata | Partially Implemented | Prompt source/output are excluded from automatic history, backup, and diagnostics. Stage metadata is memory-only, at most 200 events across 50 generations, with explicit export. Full live privacy acceptance remains open. |
+
+The source/build version is 0.4.0. Existing 0.3.x native captures, provider fixtures, and measurements remain evidence for their recorded builds only; consult QA and PERFORMANCE for newly executed 0.4.0 results. No new live feature is declared complete based only on browser presentation or a mocked provider.

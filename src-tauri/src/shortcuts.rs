@@ -8,6 +8,7 @@ pub enum Action {
     Release,
     HandsFree,
     Command,
+    ImprovePrompt,
     Paste,
     Copy,
     Open,
@@ -69,6 +70,7 @@ pub fn bindings(s: &Shortcuts) -> Vec<(&str, Action)> {
     vec![
         (&s.hands_free, Action::HandsFree),
         (&s.command, Action::Command),
+        (&s.improve_prompt, Action::ImprovePrompt),
         (&s.paste, Action::Paste),
         (&s.copy, Action::Copy),
         (&s.open, Action::Open),

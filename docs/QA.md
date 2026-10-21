@@ -1,5 +1,19 @@
 # Quality and release verification
 
+## 0.4.0 current verification
+
+The implementation adds a configurable 300 ms preparation pause, first-sample recording cue, dark preparation/processing stages, timer at the left/top, and a brief hands-free notice. Recording retains its pending target inspection when capture finishes. Opening Hush and copying text stop delivery without cancelling transcription. A modifier-only shortcut prefix now settles before it can restart busy work or stop hands-free recording; more-specific Open/Copy/Paste/Improve prompt chords can complete safely. Startup, delivery, and prompt editing have bounded deadlines. Timed-out native workers retain bounded capacity until they actually exit, and cancellation is checked immediately before dispatch.
+
+Frozen-source checks passed: **94 Rust tests, 10 frontend unit tests, 16 browser tests**, TypeScript/build/lint, rustfmt, and Clippy with warnings denied. The ordinary Rust suite explicitly ignores 16 device/desktop/provider tests. Regressions include delayed target ownership, stalled delivery and late-result cancellation, shortcut prefixes/repeats, migration of explicit AI/double-tap preferences and shortcut collisions, all style/AI-frequency combinations, correction chains, unrelated facts/negation/identifiers, list boundaries, UTF-8 input/output limits, and whole-field identity. Browser tests exercise settings and preview layout; they do not simulate successful native dictation.
+
+Real Windows component checks passed for overlay nonactivation, bottom/side geometry, timer/cancel placement, hands-free notice collapse, and the compact close control. The actual prepared microphone supplied first frames in **46/44/122 ms** across three cancelled sessions, excluding the configurable actor pause. No microphone audio was saved or uploaded. The cue's original PCM waveform is tested; audible playback during live speech remains unverified.
+
+Actual Groq requests using only public synthetic text passed: Sometimes/Always routine cleanup and Clarify/Expand prompt editing, preserving the tested facts and URL. The original live cleanup fixture first failed because it used the former generic instruction and asserted list formatting before the current local formatting stage. It was updated to exercise the production style instruction, canonical validation and final formatting, then passed. The initial Windows binding mismatch, a deprecated atomic operation, and a test-only Clippy warning were fixed before final checks. A concurrent test executable briefly blocked its own relink; the sequential final run passed. No failed run is counted as a pass.
+
+**Live acceptance remains incomplete.** Both native owned-control insertion and whole-field replacement tests were attempted. Windows refused foreground acquisition before field capture/text dispatch. Therefore actual Notepad/browser transcription-to-insertion, clipboard restoration after delivery, whole-field Apply/changed-field/protected-field integration, short spoken answers and ready-sound audibility remain unverified. The app does not bypass that Windows restriction. Physical mixed-DPI/multi-monitor checks also remain open. The 0.4.0 release verifier additionally requires browser dictation, cue/short-answer and prompt acceptance; no public Release/tag is created while these remain incomplete.
+
+[Sanitized component results](verification/update-0.4.0.json). Packaged app, installer, hosted Windows CI and background measurements are recorded below after execution.
+
 Hushline 0.1.0 is not declared production-complete. The release gate remains closed. Tests below distinguish pure/native components, UI review, real OS integration, and live provider acceptance.
 
 ## Executed automated checks

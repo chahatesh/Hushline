@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Clipboard insertion is optional. Unsupported formats cause a refusal before mutation.
 use super::{capture_target, input_epoch, Target};
-use std::{mem::size_of, time::Duration};
+use std::{
+    mem::size_of,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 use windows::{
     core::w,
     Win32::{
@@ -11,6 +15,33 @@ use windows::{
     },
 };
 type Result<T> = std::result::Result<T, String>;
+const MAX_PASTE_WORKERS: usize = 2;
+static PASTE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+struct WorkerPermit<'a>(&'a AtomicUsize);
+impl<'a> WorkerPermit<'a> {
+    fn acquire(active: &'a AtomicUsize) -> Option<Self> {
+        let mut count = active.load(Ordering::Acquire);
+        loop {
+            if count >= MAX_PASTE_WORKERS {
+                return None;
+            }
+            match active.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self(active)),
+                Err(actual) => count = actual,
+            }
+        }
+    }
+}
+impl Drop for WorkerPermit<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 struct Clipboard;
 impl Drop for Clipboard {
     fn drop(&mut self) {
@@ -139,32 +170,42 @@ pub fn paste_text(
     cancel: &tokio_util::sync::CancellationToken,
     notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
+    let permit = WorkerPermit::acquire(&PASTE_WORKERS).ok_or(
+        "Windows clipboard editing is still busy. Your text is preserved; try again after the field responds.",
+    )?;
     let target = target.clone();
     let text = text.to_string();
     let token = cancel.child_token();
     let worker_token = token.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(
-        move || match prepare_paste(&target, &text, explicit, &worker_token) {
-            Err(error) => {
-                let _ = tx.send(Err(error));
-            }
-            Ok(pending) => {
-                let _ = tx.send(if pending.delivered {
-                    Ok(String::new())
-                } else {
-                    Err(
+    std::thread::Builder::new()
+        .name("hush-clipboard".into())
+        .spawn(move || {
+            // The caller may time out while an out-of-process UIA provider is
+            // stalled. Hold the permit until this actual worker and delayed
+            // restoration finish, not just until the caller stops waiting.
+            let _permit = permit;
+            match prepare_paste(&target, &text, explicit, &worker_token) {
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                }
+                Ok(pending) => {
+                    let _ = tx.send(if pending.delivered {
+                        Ok(String::new())
+                    } else {
+                        Err(
                         "The field changed or Windows blocked paste. Your text is ready to copy."
                             .into(),
                     )
-                });
-                let warning = restore_later(pending);
-                if let Some(notice) = notice {
-                    notice(warning);
+                    });
+                    let warning = restore_later(pending);
+                    if let Some(notice) = notice {
+                        notice(warning);
+                    }
                 }
             }
-        },
-    );
+        })
+        .map_err(|_| "Windows clipboard editing could not start. Your text is preserved.")?;
     match rx.recv_timeout(Duration::from_millis(1800)) {
         Ok(result) => result,
         Err(_) => {
@@ -182,9 +223,27 @@ fn prepare_paste(
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
+    // A slow/out-of-process accessibility provider must never hold or replace
+    // the user's clipboard while it is being inspected.
+    let current = capture_target(!target.selected.is_empty())?;
+    if current.hwnd != target.hwnd
+        || current.runtime != target.runtime
+        || current.runtime.is_empty()
+        || current.caret != target.caret
+        || current.selected != target.selected
+        || (!explicit && current.epoch != target.epoch)
+    {
+        return Err("The field changed before insertion. Your text is ready to copy.".into());
+    }
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
     let owner = Owner::new()?;
     let lock = open(owner.0)?;
     let saved = unsafe { snapshot()? };
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
     unsafe {
         EmptyClipboard().map_err(|_| "Clipboard could not be prepared.")?;
         if let Err(e) = set_raw(13, &bytes(text)) {
@@ -194,14 +253,12 @@ fn prepare_paste(
     }
     let sequence = unsafe { GetClipboardSequenceNumber() };
     drop(lock);
-    let current = capture_target(!target.selected.is_empty());
-    let valid = current.is_ok_and(|c| {
-        c.hwnd == target.hwnd
-            && c.runtime == target.runtime
-            && c.caret == target.caret
-            && c.selected == target.selected
-            && (explicit || input_epoch() == target.epoch)
-    });
+    // Only fast checks remain once the clipboard is prepared. Recheck the epoch
+    // even for an explicitly approved preview: input after inspection revokes
+    // that approval for this field. Never paste a newer user copy by accident.
+    let valid = input_epoch() == current.epoch
+        && unsafe { GetForegroundWindow() }.0 as isize == current.hwnd
+        && unsafe { GetClipboardSequenceNumber() } == sequence;
     let mut delivered = false;
     if valid && !cancel.is_cancelled() {
         let event = |vk, up| INPUT {
@@ -266,6 +323,21 @@ mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn clipboard_worker_capacity_is_bounded_until_actual_worker_release() {
+        let active = AtomicUsize::new(0);
+        let first = WorkerPermit::acquire(&active).unwrap();
+        let second = WorkerPermit::acquire(&active).unwrap();
+        assert!(WorkerPermit::acquire(&active).is_none());
+        assert_eq!(active.load(Ordering::Acquire), MAX_PASTE_WORKERS);
+        drop(first);
+        let replacement = WorkerPermit::acquire(&active).unwrap();
+        assert!(WorkerPermit::acquire(&active).is_none());
+        drop(second);
+        drop(replacement);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
 
     struct Harness {
         parent: HWND,
@@ -442,6 +514,67 @@ mod integration_tests {
         assert!(crate::native::capture_target(false)
             .unwrap_err()
             .contains("password"));
+        assert!(password.text().is_empty());
+    }
+
+    #[test]
+    #[ignore = "Requires an interactive desktop; opens owned edit controls and verifies whole-field replacement without submitting."]
+    fn native_whole_field_capture_approval_and_changed_text() {
+        struct Focus(HWND);
+        impl Drop for Focus {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = SetForegroundWindow(self.0);
+                }
+            }
+        }
+        let _focus = Focus(unsafe { GetForegroundWindow() });
+        let h = Harness::open(false);
+        assert_eq!(
+            unsafe { GetForegroundWindow() },
+            h.parent,
+            "Interactive desktop focus could not be acquired"
+        );
+        unsafe {
+            SetWindowTextW(
+                h.edit,
+                w!("Make a useful plan.\r\nKeep this second paragraph."),
+            )
+            .unwrap();
+        }
+        let captured = crate::native::capture_whole_field().unwrap();
+        assert!(captured.original.contains("Keep this second paragraph."));
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(crate::native::replace_whole_field(&captured, "UNWANTED", &cancelled).is_err());
+        assert_eq!(h.text(), captured.original);
+        crate::native::replace_whole_field(
+            &captured,
+            "Please make a concise plan.\r\nPreserve the details.",
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            h.text(),
+            "Please make a concise plan.\r\nPreserve the details."
+        );
+        let captured = crate::native::capture_whole_field().unwrap();
+        unsafe {
+            SetWindowTextW(h.edit, w!("Newer user edit")).unwrap();
+        }
+        assert!(crate::native::replace_whole_field(
+            &captured,
+            "UNWANTED",
+            &CancellationToken::new()
+        )
+        .is_err());
+        assert_eq!(h.text(), "Newer user edit");
+        unsafe {
+            let _ = SendMessageW(h.edit, 0x00CF, Some(WPARAM(1)), Some(LPARAM(0)));
+        } // EM_SETREADONLY
+        assert!(crate::native::capture_whole_field().is_err());
+        let password = Harness::open(true);
+        assert!(crate::native::capture_whole_field().is_err());
         assert!(password.text().is_empty());
     }
 }

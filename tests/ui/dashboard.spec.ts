@@ -111,10 +111,11 @@ test('Hush branding and cloud polish policy persist without ambiguity', async ({
   await page.getByRole('tab',{name:'Dictation',exact:true}).click();
   await expect(choices.getByRole('button',{name:/Always/})).toHaveAttribute('aria-pressed','true');
   await choices.getByRole('button',{name:/Sometimes/}).click();
-  await page.getByLabel('Clean up my speech',{exact:true}).selectOption('literal');
+  await page.getByText('Advanced transcription', {exact:true}).click();
+  await page.getByRole('switch', {name:'Keep my exact words'}).check();
   await expect(choices.getByRole('button',{name:/Always/})).toBeDisabled();
   await expect(page.getByText('AI polish is paused while “Keep my exact words” is selected.')).toBeVisible();
-  await page.getByLabel('Clean up my speech',{exact:true}).selectOption('clean');
+  await page.getByRole('switch', {name:'Keep my exact words'}).uncheck();
   await expect(choices.getByRole('button',{name:/Sometimes/})).toHaveAttribute('aria-pressed','true');
   await page.locator('.polish-choice').screenshot({path:'docs/screenshots/cloud-polish.png',animations:'disabled'});
 });
@@ -135,7 +136,7 @@ test('voice bar preview unfolds upward with an anchored base and respects reduce
   await expect(pill.getByText('0:08',{exact:true})).toBeVisible();
   const positions=await pill.evaluate(e=>{const t=e.querySelector('small')!.getBoundingClientRect(), x=e.querySelector('svg')!.getBoundingClientRect(), w=e.querySelector('.preview-wave')!.getBoundingClientRect(); return {timer:t.x, close:x.x, wave:w.x+w.width/2, center:e.getBoundingClientRect().x+e.clientWidth/2};});
   expect(positions.timer).toBeLessThan(positions.close);
-  expect(positions.timer).toBeGreaterThan(positions.wave);
+  expect(positions.timer).toBeLessThan(positions.wave);
   expect(Math.abs(positions.wave-positions.center)).toBeLessThan(1);
 });
 
@@ -158,4 +159,83 @@ test('timeout preference persists and failed audio can be deleted from Home', as
   await page.getByRole('button',{name:'Delete saved audio'}).click();
   await page.getByRole('button',{name:'Delete permanently'}).click();
   await expect(page.getByRole('heading',{name:/Saved audio/})).toHaveCount(0);
+});
+
+
+test('writing style stays independent of AI frequency and exact-word override', async ({page}) => {
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  const styles=page.getByRole('group', {name:'Writing style',exact:true});
+  const polish=page.getByRole('group', {name:'AI polish frequency',exact:true});
+  await expect(styles.getByRole('button', {name:/Standard/})).toHaveAttribute('aria-pressed','true');
+  await styles.getByRole('button', {name:/Casual/}).click();
+  await expect(page.getByLabel('Automatic layout', {exact:true})).toBeDisabled();
+  await expect(polish.getByRole('button', {name:/Never/})).toHaveAttribute('aria-pressed','true');
+  await polish.getByRole('button', {name:/Always/}).click();
+  await styles.getByRole('button', {name:/Formal/}).click();
+  await expect(polish.getByRole('button', {name:/Always/})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByText('Its stronger grammar and wording improvements require AI polish below.', {exact:false})).toBeVisible();
+  await page.getByText('Advanced transcription', {exact:true}).click();
+  await page.getByRole('switch', {name:'Keep my exact words'}).check();
+  await expect(styles.getByRole('button', {name:/Formal/})).toBeDisabled();
+  await page.getByRole('button', {name:'Save settings',exact:true}).click();
+  await page.reload();
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  await page.getByText('Advanced transcription', {exact:true}).click();
+  await expect(page.getByRole('switch', {name:'Keep my exact words'})).toBeChecked();
+  await page.getByRole('switch', {name:'Keep my exact words'}).uncheck();
+  await expect(styles.getByRole('button', {name:/Formal/})).toHaveAttribute('aria-pressed','true');
+  await expect(polish.getByRole('button', {name:/Always/})).toHaveAttribute('aria-pressed','true');
+});
+
+test('startup cue, preparation pause, and whole-field prompt action persist', async ({page}) => {
+  await expect(page.getByText('Hush reads the whole field and previews an editable clarified version.', {exact:false})).toBeVisible();
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  await expect(page.getByLabel('Recording startup pause (milliseconds)')).toHaveValue('300');
+  await page.getByLabel('Recording startup pause (milliseconds)').fill('500');
+  await expect(page.getByRole('switch', {name:'Play a sound when recording starts'})).toBeChecked();
+  await page.getByRole('switch', {name:'Play a sound when recording starts'}).uncheck();
+  await page.getByRole('group', {name:'Prompt improvement action'}).getByRole('button', {name:/Expand/}).click();
+  await page.getByRole('tab', {name:'Shortcuts',exact:true}).click();
+  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Win+P');
+  await page.getByLabel('Improve prompt · whole field', {exact:true}).fill('Ctrl+Shift+P');
+  await page.getByRole('button', {name:'Save settings',exact:true}).click();
+  await page.reload();
+  await expect(page.locator('.prompt-help .keys')).toContainText('Shift');
+  await expect(page.getByText('Hush reads the whole field and previews an editable expanded version.', {exact:false})).toBeVisible();
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  await expect(page.getByLabel('Recording startup pause (milliseconds)')).toHaveValue('500');
+  await expect(page.getByRole('switch', {name:'Play a sound when recording starts'})).not.toBeChecked();
+  await expect(page.getByRole('group', {name:'Prompt improvement action'}).getByRole('button', {name:/Expand/})).toHaveAttribute('aria-pressed','true');
+});
+
+test('side dock preview places timer above waveform and cancel below it', async ({page}) => {
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Voice bar',exact:true}).click();
+  await page.getByRole('button', {name:'Right side',exact:true}).click();
+  await page.getByRole('button', {name:'Preview active bar',exact:true}).click();
+  const pill=page.locator('.pill-preview');
+  await expect(pill).toHaveCSS('height','128px');
+  await page.waitForTimeout(200);
+  const positions=await pill.evaluate(e=>{const t=e.querySelector('small')!.getBoundingClientRect(),x=e.querySelector('svg')!.getBoundingClientRect(),w=e.querySelector('.preview-wave')!.getBoundingClientRect(),body=e.getBoundingClientRect(),dock=e.parentElement!.getBoundingClientRect();return {timer:t.bottom,waveTop:w.top,waveBottom:w.bottom,close:x.top,center:body.top+body.height/2,dockCenter:dock.top+dock.height/2};});
+  expect(positions.timer).toBeLessThan(positions.waveTop);
+  expect(positions.close).toBeGreaterThan(positions.waveBottom);
+  expect(Math.abs(positions.center-positions.dockCenter)).toBeLessThan(1);
+});
+
+test('old polished profile upgrades without losing double tap or AI policy', async ({page}) => {
+  await page.evaluate(()=>{localStorage.setItem('hushline-browser-preview-v1',JSON.stringify({settings:{preferencesVersion:4,mode:'polished',polishPolicy:'sometimes',doubleTap:true,historyEnabled:false,transcriptionTimeoutSeconds:18,shortcuts:{push:'Ctrl+Alt+R'}}}));});
+  await page.reload();
+  await expect(page.locator('.dictate-card .keys')).toContainText('R');
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  await expect(page.getByRole('group', {name:'Writing style',exact:true}).getByRole('button', {name:/Formal/})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('group', {name:'AI polish frequency'}).getByRole('button', {name:/Sometimes/})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('switch', {name:'Double-tap for hands-free'})).toBeChecked();
+  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('18');
+  await page.getByRole('tab', {name:'Shortcuts',exact:true}).click();
+  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Win+P');
 });

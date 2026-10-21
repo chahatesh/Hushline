@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Fail-closed inspection and insertion. No screenshots, window titles or surrounding text.
-use super::{input_epoch, Target};
+use super::{input_epoch, Target, WholeFieldSnapshot};
 use std::{mem::size_of, ptr};
 use windows::{
     core::{w, PCWSTR, PWSTR},
@@ -90,6 +90,13 @@ fn array_f64(array: *mut SAFEARRAY) -> Vec<i64> {
 pub fn capture_target(read_selection: bool) -> Result<Target> {
     let _com = Com::new()?;
     let uia = automation()?;
+    inspect_focused(&uia, read_selection).map(|(target, _)| target)
+}
+fn inspect_focused(
+    uia: &IUIAutomation,
+    read_selection: bool,
+) -> Result<(Target, IUIAutomationElement)> {
+    let epoch = input_epoch();
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
@@ -215,17 +222,252 @@ pub fn capture_target(read_selection: bool) -> Result<Target> {
             "wezterm-gui.exe",
             "mintty.exe",
             "alacritty.exe",
+            "tabby.exe",
+            "hyper.exe",
+            "cmder.exe",
+            "kitty.exe",
+            "putty.exe",
+            "rio.exe",
+            "wsl.exe",
+            "bash.exe",
+            "nu.exe",
         ]
-        .contains(&app.to_ascii_lowercase().as_str());
-        Ok(Target {
-            hwnd: hwnd.0 as isize,
-            runtime,
-            caret,
-            selected,
-            app,
-            epoch: input_epoch(),
-            terminal,
-        })
+        .contains(&app.to_ascii_lowercase().as_str())
+            || element.CurrentClassName().ok().is_some_and(|class| {
+                let class = class.to_string().to_ascii_lowercase();
+                class.contains("termcontrol") || class.contains("xterm")
+            });
+        if GetForegroundWindow() != hwnd || input_epoch() != epoch {
+            return Err(
+                "The focused field changed during inspection. Transcript preserved.".into(),
+            );
+        }
+        Ok((
+            Target {
+                hwnd: hwnd.0 as isize,
+                runtime,
+                caret,
+                selected,
+                app,
+                epoch,
+                terminal,
+            },
+            element,
+        ))
+    }
+}
+
+const WHOLE_FIELD_LIMIT: usize = 32_000;
+const REPLACEMENT_LIMIT: usize = 100_000;
+fn check_field_text(text: &str) -> Result<()> {
+    if text.len() > WHOLE_FIELD_LIMIT {
+        Err("This field is larger than 32 KB. Improve prompt reads one complete field without truncating it.".into())
+    } else if text.trim().is_empty() {
+        Err("The focused field is empty. Write a prompt first.".into())
+    } else {
+        Ok(())
+    }
+}
+fn check_replacement_text(text: &str) -> Result<()> {
+    if text.trim().is_empty() || text.len() > REPLACEMENT_LIMIT {
+        Err("The proposed prompt must contain text and be no larger than 100 KB. Your original field was left unchanged.".into())
+    } else {
+        Ok(())
+    }
+}
+unsafe fn field_document(element: &IUIAutomationElement) -> Result<IUIAutomationTextRange> {
+    let pattern = element
+        .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+        .map_err(|_| "This field does not expose a safe whole-field editing interface. Copy the result instead.")?;
+    let document = pattern
+        .DocumentRange()
+        .map_err(|_| "This field does not expose its complete text.")?;
+    // A focused control may expose a page-wide TextPattern. Never ascend or read
+    // that surrounding page as if it were the explicitly requested field.
+    let enclosing = document
+        .GetEnclosingElement()
+        .map_err(|_| "Cannot verify the boundaries of the focused field.")?;
+    let owner = array_i32(
+        enclosing
+            .GetRuntimeId()
+            .map_err(|_| "Cannot verify the field's text range.")?,
+    )?;
+    let focused = array_i32(
+        element
+            .GetRuntimeId()
+            .map_err(|_| "Cannot identify the focused field.")?,
+    )?;
+    if owner.is_empty() || owner != focused {
+        return Err("This field exposes surrounding document text. Improve prompt reads only the focused field.".into());
+    }
+    Ok(document)
+}
+unsafe fn whole_text(element: &IUIAutomationElement) -> Result<String> {
+    let text = if let Ok(value) =
+        element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+    {
+        if value
+            .CurrentIsReadOnly()
+            .map_err(|_| "Cannot verify whether this field is editable.")?
+            .as_bool()
+        {
+            return Err("The focused field is read-only.".into());
+        }
+        let raw = value
+            .CurrentValue()
+            .map_err(|_| "Cannot read the focused field's text.")?;
+        // Reject before copying an arbitrarily large provider-owned BSTR.
+        if raw.len() > WHOLE_FIELD_LIMIT {
+            return Err("This field is larger than 32 KB. Improve prompt reads one complete field without truncating it.".into());
+        }
+        raw.to_string()
+    } else {
+        field_document(element)?
+            .GetText((WHOLE_FIELD_LIMIT + 1) as i32)
+            .map_err(|_| "Cannot read the focused field's complete text.")?
+            .to_string()
+    };
+    check_field_text(&text)?;
+    Ok(text)
+}
+pub fn capture_whole_field() -> Result<WholeFieldSnapshot> {
+    let _com = Com::new()?;
+    let uia = automation()?;
+    let (target, element) = inspect_focused(&uia, false)?;
+    if target.terminal {
+        return Err("Improve prompt is disabled in terminals. Paste your request into a normal text field first.".into());
+    }
+    let original = unsafe { whole_text(&element)? };
+    if unsafe { GetForegroundWindow() }.0 as isize != target.hwnd || input_epoch() != target.epoch {
+        return Err(
+            "The field changed while it was being read. Try again in the intended field.".into(),
+        );
+    }
+    Ok(WholeFieldSnapshot { target, original })
+}
+
+fn same_field(a: &Target, b: &Target) -> bool {
+    a.hwnd == b.hwnd && !a.runtime.is_empty() && a.runtime == b.runtime && !b.terminal
+}
+fn whole_field_matches(snapshot: &WholeFieldSnapshot, target: &Target, current: &str) -> bool {
+    same_field(&snapshot.target, target) && snapshot.original == current
+}
+
+/// Called only after the user approves an editable preview. Re-reads the whole
+/// field and uses a single supported replacement, never Ctrl+A or Enter.
+#[cfg(test)]
+pub fn replace_whole_field(
+    snapshot: &WholeFieldSnapshot,
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String> {
+    replace_whole_field_with_notice(snapshot, text, cancel, None)
+}
+pub fn replace_whole_field_with_notice(
+    snapshot: &WholeFieldSnapshot,
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
+    check_replacement_text(text)?;
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
+    if snapshot.target.terminal {
+        return Err("Prompt replacement is disabled in terminals. Copy the result instead.".into());
+    }
+    unsafe {
+        let _ = SetForegroundWindow(HWND(snapshot.target.hwnd as *mut _));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
+    let _com = Com::new()?;
+    let uia = automation()?;
+    let (current, element) = inspect_focused(&uia, false)?;
+    let original = unsafe { whole_text(&element)? };
+    if !whole_field_matches(snapshot, &current, &original) {
+        return Err(
+            "The original field or its text changed. Your improved prompt is ready to copy.".into(),
+        );
+    }
+    if cancel.is_cancelled()
+        || input_epoch() != current.epoch
+        || unsafe { GetForegroundWindow() }.0 as isize != current.hwnd
+    {
+        return Err(
+            "The field changed before replacement. Your improved prompt is ready to copy.".into(),
+        );
+    }
+    unsafe {
+        if let Ok(value) =
+            element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+        {
+            if value
+                .CurrentIsReadOnly()
+                .map_err(|_| "Cannot verify field protection.")?
+                .as_bool()
+            {
+                return Err("The field became read-only. Copy the result instead.".into());
+            }
+            if whole_text(&element)? != snapshot.original {
+                return Err("The field text changed before replacement. Your improved prompt is ready to copy.".into());
+            }
+            // Provider inspection is complete before the final, fast checks.
+            if cancel.is_cancelled()
+                || input_epoch() != current.epoch
+                || GetForegroundWindow().0 as isize != current.hwnd
+            {
+                return Err(
+                    "Cancelled or the field changed. Your improved prompt is ready to copy.".into(),
+                );
+            }
+            value.SetValue(&windows::core::BSTR::from(text))
+                .map_err(|_| "Windows could not safely replace this field. Your improved prompt is ready to copy.")?;
+            return Ok("Replaced the approved field using Windows accessibility.".into());
+        }
+        let document = field_document(&element)?;
+        if cancel.is_cancelled() || input_epoch() != current.epoch {
+            return Err("Cancelled or the field changed. Copy the result instead.".into());
+        }
+        let selections = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .ok()
+            .and_then(|p| p.GetSelection().ok())
+            .and_then(|ranges| {
+                if ranges.Length().ok() == Some(1) {
+                    ranges.GetElement(0).ok()
+                } else {
+                    None
+                }
+            });
+        document.Select().map_err(|_| {
+            "This field cannot safely select its complete contents. Copy the result instead."
+        })?;
+        let result = (|| {
+            let selected = capture_target(true)?;
+            let content = whole_text(&element)?;
+            if !whole_field_matches(snapshot, &selected, &content)
+                || selected.selected != snapshot.original
+            {
+                return Err(
+                    "The field changed before replacement. Copy the result instead.".into(),
+                );
+            }
+            // paste_text validates selection again before acquiring clipboard,
+            // then checks cancellation and the input epoch immediately at paste.
+            super::clipboard::paste_text(&selected, text, false, cancel, notice)
+        })();
+        if result.is_err()
+            && input_epoch() == current.epoch
+            && GetForegroundWindow().0 as isize == current.hwnd
+        {
+            if let Some(selection) = selections {
+                let _ = selection.Select();
+            }
+        }
+        result
     }
 }
 fn process_name(pid: u32) -> Option<String> {
@@ -304,13 +546,18 @@ pub fn insert_with_notice(
         return Err("Cancelled".into());
     }
     if method == "clipboard" {
-        // paste_text performs the final UIA check after preparing the clipboard.
-        // Avoid two redundant provider traversals on the insertion critical path.
+        // The worker inspects the field before touching clipboard contents.
         return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
     }
     let final_check = capture_target(!target.selected.is_empty())?;
     if !target_matches(target, &final_check, authorized_preview) {
         return Err("The target changed before insertion. Transcript preserved.".into());
+    }
+    if cancel.is_cancelled()
+        || input_epoch() != final_check.epoch
+        || unsafe { GetForegroundWindow() }.0 as isize != final_check.hwnd
+    {
+        return Err("Cancelled or the field changed. Transcript preserved.".into());
     }
     unicode_text(text)?;
     Ok("Inserted using Windows Unicode input. The receiving application does not provide a delivery receipt.".into())
@@ -458,5 +705,69 @@ mod tests {
         assert!(target_matches(&t, &b, true));
         b.selected = "y".into();
         assert!(!target_matches(&t, &b, true));
+    }
+    #[test]
+    fn whole_field_replacement_requires_exact_identity_and_complete_text() {
+        let target = Target {
+            hwnd: 1,
+            runtime: vec![1, 2],
+            caret: vec![3],
+            selected: String::new(),
+            app: "Notepad".into(),
+            epoch: 4,
+            terminal: false,
+        };
+        let snapshot = WholeFieldSnapshot {
+            target: target.clone(),
+            original: "Keep every sentence.\nSecond paragraph.".into(),
+        };
+        let mut current = target.clone();
+        current.caret = vec![100];
+        current.epoch += 10; // Preview approval allows refocusing; text must match.
+        assert!(whole_field_matches(&snapshot, &current, &snapshot.original));
+        assert!(!whole_field_matches(
+            &snapshot,
+            &current,
+            "Second paragraph."
+        ));
+        assert!(!whole_field_matches(
+            &snapshot,
+            &current,
+            "Keep every sentence.\nSecond paragraph!"
+        ));
+        current.runtime = vec![1, 3];
+        assert!(!whole_field_matches(
+            &snapshot,
+            &current,
+            &snapshot.original
+        ));
+        current = target.clone();
+        current.terminal = true;
+        assert!(!whole_field_matches(
+            &snapshot,
+            &current,
+            &snapshot.original
+        ));
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        // A cancelled apply returns before any focus, inspection or mutation.
+        assert_eq!(
+            replace_whole_field(&snapshot, "Improved", &token),
+            Err("Cancelled".into())
+        );
+    }
+    #[test]
+    fn whole_field_limit_is_utf8_bytes_and_never_truncates() {
+        assert!(check_field_text(&"a".repeat(32_000)).is_ok());
+        assert!(check_field_text(&"a".repeat(32_001)).is_err());
+        assert!(check_field_text(&"🐕".repeat(8_000)).is_ok());
+        assert!(check_field_text(&"🐕".repeat(8_001)).is_err());
+        assert!(check_field_text(" \r\n\t").is_err());
+        assert!(check_replacement_text(&"a".repeat(32_001)).is_ok());
+        assert!(check_replacement_text(&"a".repeat(100_000)).is_ok());
+        assert!(check_replacement_text(&"a".repeat(100_001)).is_err());
+        assert!(check_replacement_text(&"🐕".repeat(25_000)).is_ok());
+        assert!(check_replacement_text(&"🐕".repeat(25_001)).is_err());
+        assert!(check_replacement_text(" \n\t").is_err());
     }
 }

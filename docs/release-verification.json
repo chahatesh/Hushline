@@ -1,9 +1,9 @@
 {
-  "version": "0.3.3",
+  "version": "0.4.0",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-21T01:22:41.811333+00:00",
-  "evidence": "0.3.3 implements a bounded speech deadline, encrypted failed-audio recovery and a simplified voice bar. Component and packaged checks are recorded in docs/QA.md and docs/verification/*0.3.3.json. Live slow-response timeout/retry, speech-to-target, clipboard restoration, selected-text and physical mixed-monitor acceptance remain incomplete; the public release gate stays closed.",
+  "testedAt": "2026-10-21T22:04:10.3582782Z",
+  "evidence": "0.4.0 implements staged recording, first-sample cue, preserved asynchronous target inspection, bounded delivery, independent writing styles and whole-field prompt previews. See docs/QA.md and docs/verification/*0.4.0.json for actual results. Native owned-control capture/replacement tests were attempted but Windows refused foreground acquisition before text dispatch. Live microphone -> Groq -> Notepad/browser, audible ready cue, changed-field replacement and physical mixed-monitor acceptance remain unverified. No public Release is authorized by this report.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,
@@ -14,6 +14,11 @@
     "focusChange": false,
     "clipboardRestore": false,
     "commandPreview": false,
-    "independentBuild": false
+    "independentBuild": false,
+    "browserDictation": false,
+    "startupReadyCue": false,
+    "shortAnswers": false,
+    "promptClarifyExpand": false,
+    "promptPreviewChangedField": false
   }
 }

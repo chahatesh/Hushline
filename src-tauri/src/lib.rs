@@ -3,6 +3,7 @@ mod audio;
 mod deadline;
 mod engine;
 mod groq;
+mod lifecycle;
 mod model;
 mod native;
 mod offline;

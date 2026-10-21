@@ -1,0 +1,28 @@
+{
+  "version": "0.4.0",
+  "platform": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
+  "ordinaryRust": {"passed": 94, "failed": 0, "ignored": 16},
+  "frontendUnit": {"passed": 10},
+  "browserUI": {"passed": 16},
+  "rustFormattingAndClippyWarningsDenied": "passed",
+  "typeCheckProductionBuildAndFrontendLint": "passed",
+  "nativeOverlayNonactivation": "passed",
+  "nativeHandsFreeNoticeCollapseAndCloseControl": "passed",
+  "preparedMicrophone": {
+    "readyMs": [46, 43, 122], "firstFramesMs": [46, 44, 122],
+    "cancellation": "passed in all three sessions",
+    "scope": "actual default microphone; excludes configured 300 ms actor pause; no files or upload; variable system load"
+  },
+  "liveGroqSyntheticText": {
+    "routineModel": "openai/gpt-oss-20b", "sometimesMs": 1279, "alwaysMs": 669, "neverRequests": 0,
+    "commandModel": "openai/gpt-oss-120b", "clarifyMs": 842, "expandMs": 734,
+    "scope": "public synthetic inputs only; original test facts and URL preserved; Expand suggestions labeled; no microphone audio, user field contents, or keys in reports",
+    "limitations": "single requests including model discovery when cold; not an accuracy benchmark or end-to-end dictation measurement"
+  },
+  "nativeWholeFieldReplacement": "attempted; Windows refused foreground acquisition before reading or dispatching text; unverified",
+  "nativeClipboardInsertionRestoration": "attempted; Windows refused foreground acquisition before dispatch; unverified",
+  "liveMicrophoneGroqNotepadAndBrowser": "unverified",
+  "readySoundAudibility": "unverified; original PCM bounds and first-sample dispatch logic tested",
+  "physicalMixedDpiMultiMonitor": "unverified",
+  "publicReleaseGate": "closed"
+}

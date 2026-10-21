@@ -335,6 +335,43 @@ mod tests {
         }
     }
     #[test]
+    fn processing_prefix_yields_once_to_open_copy_paste_and_prompt_without_release_retrigger() {
+        for recording in [false, true] {
+            for (key, expected) in [
+                (0x48, Action::Open),
+                (0x43, Action::Copy),
+                (0x56, Action::Paste),
+                (0x50, Action::ImprovePrompt),
+            ] {
+                // Modifier-only push is emitted as a prefix. The actor defers
+                // that prefix; this fresh action must replace it exactly once.
+                for modifier_order in [[0xa2, 0x5b], [0x5b, 0xa2]] {
+                    let mut s = keys();
+                    assert!(s.route(modifier_order[0], true, recording).1.is_empty());
+                    assert_eq!(
+                        s.route(modifier_order[1], true, recording).1,
+                        vec![Action::Push]
+                    );
+                    let (consumed, actions) = s.route(key, true, recording);
+                    assert!(consumed);
+                    assert_eq!(actions, vec![expected]);
+                    assert!(
+                        s.route(key, true, recording).1.is_empty(),
+                        "A held primary key must not repeat the action"
+                    );
+                    assert!(
+                        s.route(key, false, recording).1.is_empty(),
+                        "Primary-key release must not restart Push"
+                    );
+                    assert!(s.route(modifier_order[1], false, recording).1.is_empty());
+                    assert!(s.route(modifier_order[0], false, recording).1.is_empty());
+                    assert!(s.held.is_none());
+                    assert!(!s.down.iter().any(|down| *down));
+                }
+            }
+        }
+    }
+    #[test]
     fn hold_releases_once_and_key_repeats_are_ignored() {
         let mut s = keys();
         s.route(0x5b, true, false);

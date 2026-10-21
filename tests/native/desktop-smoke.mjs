@@ -26,13 +26,29 @@ try {
   const before=await native(main,'snapshot');
   report.checks.nativeSnapshot=true;
   report.checks.noSecretInSettings=!('apiKey' in before.settings);
-  assert.equal(before.settings.preferencesVersion,4);
+  assert.equal(before.settings.preferencesVersion,5);
   try {
     for(const polishPolicy of ['always','sometimes','never']) {
       await native(main,'save_settings',{settings:{...before.settings,polishPolicy}});
       assert.equal((await native(main,'snapshot')).settings.polishPolicy,polishPolicy);
     }
     report.checks.nativePolishPolicyPersistence=true;
+    for(const writingStyle of ['casual','standard','formal']) {
+      await native(main,'save_settings',{settings:{...before.settings,writingStyle}});
+      const settings=(await native(main,'snapshot')).settings;
+      assert.equal(settings.writingStyle,writingStyle);assert.equal(settings.polishPolicy,before.settings.polishPolicy);assert.equal(settings.doubleTap,before.settings.doubleTap);
+    }
+    for(const startupDelayMs of [0,300,1500]) {
+      await native(main,'save_settings',{settings:{...before.settings,startupDelayMs,recordingCueEnabled:false}});
+      const settings=(await native(main,'snapshot')).settings;
+      assert.equal(settings.startupDelayMs,startupDelayMs);assert.equal(settings.recordingCueEnabled,false);
+    }
+    report.checks.nativeStyleAndStartupPreferences=true;
+    for(const promptImproveMode of ['clarify','expand']) {
+      await native(main,'save_settings',{settings:{...before.settings,promptImproveMode}});
+      assert.equal((await native(main,'snapshot')).settings.promptImproveMode,promptImproveMode);
+    }
+    report.checks.nativePromptActionPreference=true;
     for(const transcriptionTimeoutSeconds of [3,5,12,120]) {
       await native(main,'save_settings',{settings:{...before.settings,transcriptionTimeoutSeconds}});
       assert.equal((await native(main,'snapshot')).settings.transcriptionTimeoutSeconds,transcriptionTimeoutSeconds);
@@ -59,6 +75,20 @@ try {
     report.checks.nativeCredentialUIRoundtrip=true;
   }else report.checks.nativeCredentialUIRoundtrip='skipped: existing key preserved';
   const baselineHistory=(await native(main,'snapshot')).history.length;
+  // Exercise abandoned preparation through the real actor without opening a
+  // microphone or sending any audio. Every delayed StartCapture must be stale.
+  await native(main,'save_settings',{settings:{...before.settings,startupDelayMs:1500,recordingCueEnabled:false}});
+  try {
+    for(let i=0;i<3;i++) {
+      await native(main,'action',{name:'test'});
+      await waitFor(async()=>(await native(main,'snapshot')).view.phase==='starting');
+      await native(main,'action',{name:i%2?'test':'cancel'});
+      await waitFor(async()=>['idle','error'].includes((await native(main,'snapshot')).view.phase));
+    }
+    await new Promise(r=>setTimeout(r,1700));
+    assert.notEqual((await native(main,'snapshot')).view.phase,'listening');
+    report.checks.nativeAbandonedStartupAndRapidRetries=true;
+  } finally { await native(main,'action',{name:'cancel'});await native(main,'save_settings',{settings:before.settings}); }
   report.checks.microphoneTestStage='starting';
   await main.getByRole('button',{name:'Test',exact:true}).click();
   const initialMic=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return ['listening','error'].includes(view.phase)?view:false;});
@@ -67,6 +97,10 @@ try {
   await native(main,'action',{name:'cancel'});await waitFor(async()=>(await native(main,'snapshot')).view.phase==='idle');
   assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
   report.checks.nativeMicrophoneTestCancel=true;
+  const stages=(await native(main,'snapshot')).diagnostics;
+  assert(stages.some(e=>e.stage==='arming'));assert(stages.some(e=>e.stage==='recording'));
+  assert(stages.every(e=>Object.keys(e).sort().join(',')==='elapsedMs,generation,outcome,stage'));
+  report.checks.nativeStageMetadataOnly=true;
   // Exercise normal Stop and its final-frame drain through real IPC, still in
   // microphone-test mode: neither success nor silence rejection uploads audio.
   await native(main,'action',{name:'test'});

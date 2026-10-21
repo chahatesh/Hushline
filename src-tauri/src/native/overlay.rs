@@ -36,6 +36,7 @@ struct Bridge {
 struct OverlayView {
     generation: u64,
     phase: String,
+    stage: String,
     message: String,
     warning: String,
     level: f32,
@@ -72,7 +73,6 @@ static BRIDGE: OnceLock<Bridge> = OnceLock::new();
 struct Painter {
     view: Arc<Mutex<OverlayView>>,
     tx: mpsc::Sender<Action>,
-    tick: Cell<u32>,
     dpi: Cell<u32>,
     font: Cell<HFONT>,
     small: Cell<HFONT>,
@@ -198,7 +198,6 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
         let painter = Rc::new(Painter {
             view: shared,
             tx,
-            tick: Cell::new(0),
             dpi: Cell::new(0),
             font: Cell::new(HFONT::default()),
             small: Cell::new(HFONT::default()),
@@ -274,6 +273,7 @@ pub fn update(view: &View) {
             *v = OverlayView {
                 generation: view.generation,
                 phase: view.phase.clone(),
+                stage: view.stage.clone(),
                 message: view.message.clone(),
                 warning: view.warning.clone(),
                 level: view.level,
@@ -398,7 +398,10 @@ fn notice_text(view: &OverlayView) -> String {
     if view.phase == "idle" {
         return String::new();
     }
-    let message = if view.phase == "error" {
+    let message = if view.phase == "error"
+        || (matches!(view.phase.as_str(), "starting" | "listening")
+            && view.message.starts_with("Hands-free"))
+    {
         view.message.as_str()
     } else {
         ""
@@ -417,6 +420,29 @@ fn notice_id(view: &OverlayView) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     notice_text(view).hash(&mut hash);
     hash.finish()
+}
+fn timer_bounds(width: f64, height: f64, side: bool) -> (f64, f64, f64, f64) {
+    if side {
+        (4.0, 6.0, width - 4.0, 21.0)
+    } else {
+        (12.0, (height - 15.0) / 2.0, 42.0, (height + 15.0) / 2.0)
+    }
+}
+fn recording_level(view: &OverlayView) -> f32 {
+    if view.phase == "listening" {
+        view.level.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+fn processing_progress(stage: &str) -> usize {
+    match stage {
+        "preparing_audio" => 2,
+        "transcribing" => 5,
+        "polishing" => 8,
+        "inserting" => 11,
+        _ => 0,
+    }
 }
 unsafe fn notice_height(hwnd: HWND, p: &Painter, value: &str, width: i32) -> i32 {
     if value.is_empty() {
@@ -729,12 +755,17 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         bottom: height,
     });
     let light = view.theme == "light";
-    let background = if light {
+    let waiting = matches!(view.phase.as_str(), "starting" | "processing");
+    let background = if waiting {
+        rgb(16, 18, 25)
+    } else if light {
         rgb(247, 242, 255)
     } else {
         rgb(35, 23, 55)
     };
-    let ink = if light {
+    let ink = if waiting {
+        rgb(153, 163, 183)
+    } else if light {
         rgb(53, 29, 85)
     } else {
         rgb(244, 236, 255)
@@ -762,7 +793,9 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         width,
         height,
         (0.5, 0.5, width as f64 - 1.0, height as f64 - 1.0),
-        if light {
+        if waiting {
+            rgb(44, 49, 63)
+        } else if light {
             rgb(208, 184, 244)
         } else {
             rgb(92, 59, 138)
@@ -793,26 +826,22 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             shape((w - 20.0) / 2.0, (h - 2.0) / 2.0, 20.0, 2.0, accent)
         }
     } else {
-        let level = if view.phase == "processing" {
-            0.35
-        } else if view.phase == "listening" {
-            view.level
-        } else {
-            0.0
-        };
-        let time = if p.animated {
-            if view.phase == "processing" {
-                p.tick.get() as f32 * 0.24
-            } else {
-                view.seconds * 3.0
-            }
+        let level = recording_level(&view);
+        let time = if p.animated && view.phase == "listening" {
+            view.seconds * 3.0
         } else {
             0.0
         };
         for i in 0..11 {
             let variation = 0.25 + (i as f32 * 1.31 + time).sin().abs() * 0.75;
             let amplitude = 3.0 + level as f64 * 15.0 * variation as f64;
-            let color = if matches!(view.phase.as_str(), "error" | "success") {
+            let color = if waiting {
+                if view.phase == "processing" && i < processing_progress(&view.stage) {
+                    rgb(131, 146, 173)
+                } else {
+                    rgb(67, 77, 99)
+                }
+            } else if matches!(view.phase.as_str(), "error" | "success") {
                 accent
             } else {
                 mix_color(violet, turquoise, i as f64 / 10.0)
@@ -820,7 +849,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             if side {
                 shape(
                     (w - amplitude) / 2.0,
-                    wave_origin(h - 36.0) + i as f64 * 5.0,
+                    wave_origin(h) + i as f64 * 5.0,
                     amplitude,
                     2.6,
                     color,
@@ -852,23 +881,15 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             view.seconds as u32 / 60,
             view.seconds as u32 % 60
         );
-        let rect = if side {
-            RECT {
-                left: (4.0 * scale) as i32,
-                top: top + ((h - 39.0) * scale) as i32,
-                right: width - (4.0 * scale) as i32,
-                bottom: top + ((h - 24.0) * scale) as i32,
-            }
-        } else {
-            RECT {
-                left: ((w - 58.0) * scale) as i32,
-                top: top + ((h - 15.0) / 2.0 * scale) as i32,
-                right: width - (28.0 * scale) as i32,
-                bottom: top + ((h + 15.0) / 2.0 * scale) as i32,
-            }
+        let (left, upper, right, lower) = timer_bounds(w, h, side);
+        let rect = RECT {
+            left: (left * scale) as i32,
+            top: top + (upper * scale) as i32,
+            right: (right * scale) as i32,
+            bottom: top + (lower * scale) as i32,
         };
         let _ = SetBkMode(dc, TRANSPARENT);
-        text(dc, &timer, rect, p.small.get(), rgb(255, 255, 255));
+        text(dc, &timer, rect, p.small.get(), ink);
     }
     if expanded && top > 0 {
         let padding = (14.0 * scale) as i32;
@@ -1027,11 +1048,9 @@ unsafe extern "system" fn procedure(
                 position(hwnd, &p, same_dock && same_monitor);
             }
             advance_animation(hwnd, &p);
-            if view.phase == "processing" && p.animated {
-                SetTimer(Some(hwnd), 1, 40, None);
-            } else {
-                let _ = KillTimer(Some(hwnd), 1);
-            }
+            // Waiting states are static; only real microphone meter updates
+            // drive the waveform. No perpetual loading animation or timer.
+            let _ = KillTimer(Some(hwnd), 1);
             let label = if active {
                 view.message.as_str()
             } else {
@@ -1073,9 +1092,6 @@ unsafe extern "system" fn procedure(
             } else if wparam.0 == 2 {
                 advance_animation(hwnd, &p);
                 let _ = InvalidateRect(Some(hwnd), None, false);
-            } else {
-                p.tick.set(p.tick.get().wrapping_add(1));
-                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
         }
@@ -1100,7 +1116,9 @@ unsafe extern "system" fn procedure(
                 } else {
                     x >= pill.right - (28.0 * scale) as i32
                 };
-            let action = if cancel || (in_pill && view.phase == "processing") {
+            let action = if cancel
+                || (in_pill && matches!(view.phase.as_str(), "starting" | "processing"))
+            {
                 Action::Cancel
             } else if !in_pill || view.phase == "error" || view.phase == "preview" {
                 Action::Open
@@ -1130,6 +1148,39 @@ unsafe extern "system" fn procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timer_precedes_centered_wave_and_cancel_at_every_size() {
+        for (width, height) in [(168.0, 32.0), (168.0, 28.0), (340.0, 32.0)] {
+            let (left, top, right, bottom) = timer_bounds(width, height, false);
+            assert!(left > 0.0 && top >= 0.0 && bottom <= height);
+            assert!(right < wave_origin(width));
+            assert!(wave_origin(width) + 52.6 < width - 28.0);
+        }
+        for height in [112.0, 128.0] {
+            let (_, top, _, bottom) = timer_bounds(40.0, height, true);
+            assert!(top > 0.0 && bottom < wave_origin(height));
+            assert!(wave_origin(height) + 52.6 < height - 24.0);
+        }
+    }
+    #[test]
+    fn preparation_and_processing_never_react_to_meter_or_run_wave_motion() {
+        let mut view = OverlayView {
+            phase: "starting".into(),
+            level: 0.9,
+            ..Default::default()
+        };
+        assert_eq!(recording_level(&view), 0.0);
+        view.phase = "processing".into();
+        assert_eq!(recording_level(&view), 0.0);
+        assert_eq!(
+            ["preparing_audio", "transcribing", "polishing", "inserting"].map(processing_progress),
+            [2, 5, 8, 11]
+        );
+        view.phase = "listening".into();
+        assert_eq!(recording_level(&view), 0.9);
+        view.level = 10.0;
+        assert_eq!(recording_level(&view), 1.0);
+    }
     #[test]
     fn meter_updates_do_not_reopen_collapsed_details() {
         let mut presentation = Presentation::default();
@@ -1227,6 +1278,33 @@ mod tests {
         assert_eq!(notice_text(&v), "Choose another device in Settings");
         v.phase = "success".into();
         assert_eq!(notice_text(&v), "Choose another device in Settings");
+    }
+    #[test]
+    fn hands_free_activation_notice_survives_ready_without_rearming_compact_details() {
+        let mut view = OverlayView {
+            generation: 1,
+            phase: "starting".into(),
+            message: "Hands-free · press the shortcut again to stop".into(),
+            ..Default::default()
+        };
+        let mut presentation = Presentation::default();
+        assert_eq!(notice_text(&view), view.message);
+        assert!(presentation.sync(&view));
+        view.phase = "listening".into();
+        assert_eq!(notice_text(&view), view.message);
+        assert!(!presentation.sync(&view));
+        presentation.compact = true; // The existing details deadline expired.
+        for reading in 0..150 {
+            view.level = 0.6;
+            view.seconds = reading as f32 * 0.02;
+            assert!(!presentation.sync(&view));
+            assert!(presentation.compact);
+        }
+        view.phase = "processing".into();
+        assert!(notice_text(&view).is_empty());
+        view.phase = "listening".into();
+        view.message = "Listening".into();
+        assert!(notice_text(&view).is_empty());
     }
     #[test]
     #[ignore = "Shows synthetic 50-Hz voice activity for five seconds; no microphone or network."]
@@ -1471,7 +1549,7 @@ mod tests {
         update(&View {
             generation: 1,
             phase: "listening".into(),
-            message: "Listening".into(),
+            message: "Hands-free · press the shortcut again to stop".into(),
             level: 0.6,
             ..View::default()
         });
@@ -1490,7 +1568,7 @@ mod tests {
             update(&View {
                 generation: 1,
                 phase: "listening".into(),
-                message: "Listening".into(),
+                message: "Hands-free · press the shortcut again to stop".into(),
                 level: 0.6,
                 seconds: reading as f32 * 0.02,
                 ..View::default()

@@ -38,8 +38,12 @@ pub struct Capture {
     id: u64,
     cancelled: Arc<AtomicBool>,
     silence: Arc<AtomicBool>,
+    ready: Arc<AtomicBool>,
 }
 impl Capture {
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
     pub fn stop_on_silence(&self, enabled: bool) {
         self.silence.store(enabled, Ordering::Relaxed);
     }
@@ -62,6 +66,7 @@ struct Start {
     events: mpsc::Sender<Event>,
     cancelled: Arc<AtomicBool>,
     silence: Arc<AtomicBool>,
+    ready: Arc<AtomicBool>,
 }
 enum Request {
     Configure(Settings),
@@ -130,12 +135,14 @@ impl Engine {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let cancelled = Arc::new(AtomicBool::new(false));
         let silence = Arc::new(AtomicBool::new(false));
+        let ready = Arc::new(AtomicBool::new(false));
         let request = Start {
             id,
             settings,
             events: events.clone(),
             cancelled: cancelled.clone(),
             silence: silence.clone(),
+            ready: ready.clone(),
         };
         if self.tx.send(Request::Start(request)).is_err() {
             let _ = events.send(Event::Finished(Err(
@@ -147,6 +154,7 @@ impl Engine {
             id,
             cancelled,
             silence,
+            ready,
         }
     }
 }
@@ -201,6 +209,7 @@ fn begin(request: &Start, stream: &mut Option<wasapi::Stream>) -> Result<Active,
             events: request.events.clone(),
             cancelled: request.cancelled.clone(),
             silence: request.silence.clone(),
+            ready: request.ready.clone(),
         },
         samples,
         rate,
@@ -289,7 +298,6 @@ fn worker(rx: mpsc::Receiver<Request>) {
                 };
                 match result {
                     Ok(recording) => {
-                        let _ = request.events.send(Event::Ready);
                         active = Some(recording);
                     }
                     Err(error) => {
@@ -326,6 +334,9 @@ fn worker(rx: mpsc::Receiver<Request>) {
                 .err();
             let cancel = recording.request.cancelled.load(Ordering::Acquire);
             let frames = recording.samples.len();
+            if frames > 0 && !recording.request.ready.swap(true, Ordering::AcqRel) {
+                let _ = recording.request.events.send(Event::Ready);
+            }
             if recording.last_packet.elapsed() > Duration::from_secs(2) {
                 error=Some("Your microphone stopped sending audio. Reconnect it or choose another device. Nothing was sent.".into());
             }
@@ -505,6 +516,7 @@ mod tests {
             events,
             cancelled: Arc::new(AtomicBool::new(true)),
             silence: Arc::new(AtomicBool::new(false)),
+            ready: Arc::new(AtomicBool::new(false)),
         };
         let mut stream = None;
         assert_eq!(begin(&request, &mut stream).err().unwrap(), "Cancelled");
@@ -610,6 +622,7 @@ mod tests {
                 events,
                 cancelled: Arc::new(AtomicBool::new(false)),
                 silence: Arc::new(AtomicBool::new(false)),
+                ready: Arc::new(AtomicBool::new(false)),
             },
             samples,
             rate: rate as u32,

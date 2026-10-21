@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — unreleased
+
+- Move the voice-bar timer to the left and × to the right, including compact mode; side docks put time above the centered waveform. Keep preparation and processing dark, with distinct stage labels; only microphone samples drive the bright recording waveform.
+- Add a configurable 300 ms startup pause (0–1,500 ms) and an optional quiet, original recording-ready cue on first frames. Abandoned holds cannot start recording later. Preserve existing double-tap preferences and its separate release window.
+- Retain pending original-target inspection across recording release, separate transcription from insertion invalidation, and bound microphone startup/delivery. Opening Hush or copying during processing must retain recoverable text rather than leave a stuck processing state. Keep clipboard restoration and late-result safeguards.
+- Add Casual, Standard, and Formal writing styles independently of Always/Sometimes/Never AI polish, with exact-word preservation under Advanced transcription. Migrate legacy profiles without resetting provider, shortcuts, double-tap, history, key, or timeout choices.
+- Strengthen explicit self-correction handling, mixed prose/list parsing, multi-sentence items, and mode-specific AI instructions. Validate against corrected meaning, protect unrelated facts/identifiers, and retain local text when AI output is rejected or times out. Ambiguous wording remains conservative; universal semantic accuracy is not claimed.
+- Add shortcut-only Improve prompt (Ctrl+Win+P): read one complete focused editable field up to 32 KB, Clarify or Expand with a 20-second AI deadline, and review/edit before Apply/Copy/Cancel. Optional additions and assumptions are labeled. Revalidate the unchanged original field before a single approved replacement; preserve unsupported/changed fields. Prompt contents stay transient and out of history/diagnostics. Proposed output is limited to 100 KB.
+- Add bounded, memory-only stage timing/outcome diagnostics with explicit export, plus migration, state/deadline, writing, prompt-edit, and interface regressions. See QA.md for actual executed results.
+- Recording cues, revised native behavior, whole-field prompt support, and uninterrupted live Groq-to-application acceptance remain partially verified until the required Windows checks pass. The public GitHub Release gate remains closed.
+
 ## 0.3.3 — 2026-10-20
 
 - Simplify the voice bar to a centered waveform with the time beside ×; remove the listening label. Close remains usable after the 2.5-second contraction.

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { defaults, emptyView, type Snapshot, type Backup, type Settings } from './types';
+import { defaults, emptyView, migrateSettings, type Snapshot, type Backup, type Settings } from './types';
 export const desktop = isTauri();
 const previewKey = 'hushline-browser-preview-v1';
-function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], savedAudio: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
-function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) { const parsed = JSON.parse(stored); return { ...initial(), ...parsed, settings: { ...defaults, ...parsed.settings }, view: { ...emptyView } }; } } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
+function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], savedAudio: [], diagnostics: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
+function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) { const parsed = JSON.parse(stored); return { ...initial(), ...parsed, settings: migrateSettings(parsed.settings), view: { ...emptyView } }; } } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
 export async function call<T = void>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (desktop) return invoke<T>(command, args);
   // Browser-only UI review: no microphone, keys, cloud calls, or system input are simulated.
@@ -25,7 +25,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
     case 'import_configuration': {
       const b = JSON.parse(String(args.content)) as Backup;
       if (b.version !== 1 || !b.settings || !Array.isArray(b.dictionary) || !Array.isArray(b.snippets) || !Array.isArray(b.styles)) throw new Error('Invalid backup file.');
-      Object.assign(data, b); break;
+      Object.assign(data, b, { settings: migrateSettings(b.settings) }); break;
     }
     case 'copy_text': await navigator.clipboard.writeText(String(args.text)); break;
     default: throw new Error('Open the installed Windows app to use microphone, secure key storage, and system-wide dictation.');
