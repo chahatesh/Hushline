@@ -11,7 +11,7 @@ Status describes this revision, not a promise of commercial equivalence. **Imple
 | Native WASAPI microphone capture | Partially Implemented | Stopped native-client preparation, actual frames/cancellation and normal Stop passed. More devices and full microphone-to-target compatibility remain unverified. |
 | Microphone enumeration and selection | Partially Implemented | Native enumeration plus dashboard selector; duplicate device names are not disambiguated by stable ID. |
 | Voice activity detection / sustained silence | Partially Implemented | Energy threshold and duration bounds implemented. Quiet/noisy room validation and semantic speech detection remain incomplete. |
-| In-memory WAV, 16 kHz mono, anti-alias resampling | Implemented | Duration, DC preservation, silence, and high-frequency attenuation tests pass; no raw-audio disk writes. |
+| In-memory WAV, 16 kHz mono, anti-alias resampling | Implemented | Duration, DC preservation, silence, and high-frequency attenuation tests pass; no plaintext audio disk writes; failed-audio DPAPI recovery is documented below. |
 | Long-session chunking / compression selection | Not Implemented | Sessions capped at 600 seconds, below a conservative 24 MB upload guard. WAV only; no streaming endpoint. |
 | Push-to-talk Ctrl+Win | Partially Implemented | Hook routing tests pass. Live microphone → Groq → Notepad hold/release acceptance remains unverified. |
 | Hands-free Ctrl+Win+Space | Partially Implemented | Toggle state path, timer, level, silence stop exist; live acceptance pending. |
@@ -116,3 +116,13 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | --- | --- | --- |
 | Brief-hiccup dictation and substantial-loss review | Partially Implemented | Three real captures plus the packaged UI mic check passed without a review warning. Policy regressions and a 500 ms forced loss pass the substantial-loss guard. Lost speech is not reconstructed and broad live target acceptance remains open. |
 | Cursor, timed collapse and centered waveform | Partially Implemented | Native class/client cursor, 2.5-second contraction, centered bottom/side waveform, same lower anchor and unchanged listening/focus checks pass. Actual physical mixed-monitor acceptance remains open. |
+
+### 0.3.3 timeout and pill update
+
+| Feature | Status | Evidence / limit |
+| --- | --- | --- |
+| Pill label removal, timer beside × | Partially Implemented | Native and browser layout checks run for bottom/side docks; physical mixed-DPI acceptance remains open. |
+| Five-second speech deadline, exact error | Partially Implemented | Cancellation and late-result regression; delayed loopback HTTP fixture exercises the real speech client. Real slow Groq/Notepad acceptance remains open. |
+| Encrypted failed-audio recovery | Partially Implemented | Windows DPAPI/SQLite restart, corruption, retention, expiry and memory-only private tests. Home exposes Retry/Delete; complete live microphone → timeout → retry flow awaits manual acceptance. |
+| Retry avoids old insertion target | Partially Implemented | New generation has no target/selection; recovered text is copy-only. Live target application acceptance remains open. |
+| Bounded optional AI editing | Partially Implemented | Five-second cleanup limit falls back locally; ten-second command-edit limit fails safely. Live provider timeout acceptance remains open. |

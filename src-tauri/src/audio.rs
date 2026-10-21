@@ -21,7 +21,7 @@ pub enum Event {
     Meter { level: f32, seconds: f32 },
     Finished(Result<Recording, String>),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Recording {
     pub wav: Vec<u8>,
     pub duration_ms: u64,

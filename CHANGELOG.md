@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3 — 2026-10-20
+
+- Simplify the voice bar to a centered waveform with the time beside ×; remove the listening label. Close remains usable after the 2.5-second contraction.
+- Add a five-second, configurable speech deadline with the requested error above the pill. Cancel expired work so late results cannot paste.
+- Keep failed audio for Retry/Delete in Home, encrypted using Windows DPAPI. Retain at most three clips for seven days; private-mode audio stays in memory. Successful retries discard saved audio and return text for review/copy.
+- Bound optional cleanup waits and fall back to local formatting. Add deadline, retention, private-storage, browser and native regressions.
+- Full live dictation acceptance and the public release gate remain pending; see QA.md.
+
 ## 0.3.2 — unreleased
 
 - Correct the overly strict 0.3.1 audio policy: a brief discontinuity no longer disables paste, snippets or AI polish for the entire recording. Require review for measured loss of at least 250 ms in one gap or 500 ms in total. Missing audio is not reconstructed.

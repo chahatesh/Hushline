@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! The dictation actor owns session state. The settings webview is never on the critical path.
 use crate::{
-    audio,
+    audio, deadline,
     groq::Groq,
     model::*,
     native::{self, Target},
     offline::Offline,
+    recovery::Recovery,
     shortcuts::Action,
     store::Store,
     text,
@@ -29,6 +30,7 @@ pub struct AppState {
     cancel: Mutex<CancellationToken>,
     offline: Offline,
     offline_cancel: Mutex<CancellationToken>,
+    recovery: Recovery,
 }
 enum Message {
     Action(Action),
@@ -43,6 +45,8 @@ enum Message {
     Hide(u64),
     ClipboardWarning(String),
     Polishing(u64),
+    Retry(String),
+    RecoverySaved(u64, bool),
 }
 struct Session {
     id: u64,
@@ -57,6 +61,7 @@ struct Session {
     stopping: bool,
 }
 struct Completed {
+    recovery_id: Option<String>,
     text: String,
     target: Result<Target, String>,
     preview: bool,
@@ -69,6 +74,52 @@ struct Completed {
 struct Pending {
     text: String,
     target: Target,
+}
+struct Job {
+    id: u64,
+    settings: Settings,
+    target: Option<Result<Target, String>>,
+    command: bool,
+    recovery_id: Option<String>,
+}
+impl From<Session> for Job {
+    fn from(s: Session) -> Self {
+        Self {
+            id: s.id,
+            settings: s.settings,
+            target: s.target,
+            command: s.command,
+            recovery_id: None,
+        }
+    }
+}
+fn spawn_process(
+    state: Arc<AppState>,
+    job: Job,
+    recording: audio::Recording,
+    cancel: CancellationToken,
+) {
+    tauri::async_runtime::spawn(async move {
+        let id = job.id;
+        let retry = job.recovery_id.is_some();
+        let persist = job.settings.history_enabled;
+        let backup = recording.clone();
+        let result = process(state.clone(), job, recording, cancel.clone()).await;
+        let save =
+            !retry && result.as_ref().is_err_and(|e| e != "Cancelled") && !cancel.is_cancelled();
+        let _ = state.tx.send(Message::Done(id, Box::new(result)));
+        if save {
+            let st = state.clone();
+            let saved = tauri::async_runtime::spawn_blocking(move || {
+                let persist = persist && st.settings.read().unwrap().history_enabled;
+                st.recovery.save(&st.store, backup, persist)
+            })
+            .await;
+            if let Ok(info) = saved {
+                let _ = state.tx.send(Message::RecoverySaved(id, info.in_memory));
+            }
+        }
+    });
 }
 
 fn publish(app: &tauri::AppHandle, state: &AppState, change: impl FnOnce(&mut View)) {
@@ -178,7 +229,7 @@ fn begin(
 
 async fn process(
     state: Arc<AppState>,
-    session: Session,
+    session: Job,
     recording: audio::Recording,
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
@@ -195,17 +246,26 @@ async fn process(
     let snippets: Vec<Snippet> = state.store.get("snippets")?;
     let styles: Vec<Style> = state.store.get("styles")?;
     let hints = text::vocabulary_hint(&dictionary);
-    let speech = if let Some(key) = key.as_ref() {
-        state
-            .groq
-            .transcribe(key, recording.wav, &session.settings, &hints, &cancel)
-            .await?
-    } else {
-        state
-            .offline
-            .transcribe(recording.wav, &session.settings, &hints, &cancel)
-            .await?
-    };
+    let (speech_state, speech_settings, speech_hints, speech_key) =
+        (&state, &session.settings, &hints, &key);
+    let speech = deadline::run(
+        Duration::from_secs(session.settings.transcription_timeout_seconds as u64),
+        &cancel,
+        |request| async move {
+            if let Some(key) = speech_key.as_ref() {
+                speech_state
+                    .groq
+                    .transcribe(key, recording.wav, speech_settings, speech_hints, &request)
+                    .await
+            } else {
+                speech_state
+                    .offline
+                    .transcribe(recording.wav, speech_settings, speech_hints, &request)
+                    .await
+            }
+        },
+    )
+    .await?;
     let local_mode = text::local_mode(
         &session.settings.mode,
         &session.settings.language,
@@ -264,7 +324,7 @@ async fn process(
         None
     } {
         output = expanded;
-        preview = confirm;
+        preview = confirm && session.recovery_id.is_none();
     } else {
         let style = if session.settings.context_enabled {
             target.as_ref().ok().and_then(|t| {
@@ -329,6 +389,7 @@ async fn process(
         return Err("Cancelled".into());
     }
     Ok(Completed {
+        recovery_id: session.recovery_id,
         text: output,
         target,
         preview,
@@ -373,28 +434,42 @@ async fn rewrite(
     command: bool,
     cancel: &CancellationToken,
 ) -> Result<String, String> {
-    if settings.provider == "offline" {
-        state
-            .offline
-            .rewrite(&settings.local_text_model, input, instruction, cancel)
-            .await
-    } else {
-        let key = native::read_key()?;
-        state
-            .groq
-            .rewrite(
-                &key,
-                if command {
-                    &settings.command_model
-                } else {
-                    &settings.cleanup_model
-                },
-                input,
-                instruction,
-                cancel,
-            )
-            .await
-    }
+    deadline::run(
+        Duration::from_secs(if command { 10 } else { 5 }),
+        cancel,
+        |request| async move {
+            if settings.provider == "offline" {
+                state
+                    .offline
+                    .rewrite(&settings.local_text_model, input, instruction, &request)
+                    .await
+            } else {
+                let key = native::read_key()?;
+                state
+                    .groq
+                    .rewrite(
+                        &key,
+                        if command {
+                            &settings.command_model
+                        } else {
+                            &settings.cleanup_model
+                        },
+                        input,
+                        instruction,
+                        &request,
+                    )
+                    .await
+            }
+        },
+    )
+    .await
+    .map_err(|e| {
+        if e == deadline::AUDIO_TIMEOUT {
+            "AI editing took too long.".into()
+        } else {
+            e
+        }
+    })
 }
 
 fn finish_completed(
@@ -436,7 +511,7 @@ fn finish_completed(
         v.last_text = done.text.clone();
         v.phase = if done.preview {
             "preview"
-        } else if inserted {
+        } else if inserted || done.recovery_id.is_some() {
             "success"
         } else {
             "error"
@@ -444,6 +519,8 @@ fn finish_completed(
         .into();
         v.message = if done.preview {
             "Review your edit"
+        } else if done.recovery_id.is_some() {
+            "Recovered transcript ready to copy"
         } else if inserted {
             "Done"
         } else {
@@ -480,6 +557,66 @@ async fn actor(
     let mut last_dashboard_meter: Option<Instant> = None;
     while let Some(message) = rx.recv().await {
         match message {
+            Message::RecoverySaved(id, in_memory) => {
+                let _ = app.emit_to("main", "recovery-updated", ());
+                if id == generation && !cancellation.is_cancelled() {
+                    publish(&app, &state, |v| {
+                        v.warning = if in_memory {
+                            "Audio kept in memory. Open Home to retry before quitting Hush."
+                        } else {
+                            "Audio saved securely on this computer. Open Home to retry."
+                        }
+                        .into();
+                    });
+                }
+            }
+            Message::Retry(clip_id) => {
+                if session.is_some()
+                    || pending.is_some()
+                    || state.view.lock().unwrap().phase == "processing"
+                {
+                    continue;
+                }
+                generation += 1;
+                cancellation.cancel();
+                cancellation = CancellationToken::new();
+                *state.cancel.lock().unwrap() = cancellation.clone();
+                let id = generation;
+                let settings = state.settings.read().unwrap().clone();
+                publish(&app, &state, |v| {
+                    v.generation = id;
+                    v.phase = "processing".into();
+                    v.message = "Retrying saved audio".into();
+                    v.warning.clear();
+                    v.seconds = 0.0;
+                });
+                let st = state.clone();
+                let token = cancellation.clone();
+                tauri::async_runtime::spawn(async move {
+                    let loader = st.clone();
+                    let load_id = clip_id.clone();
+                    let recording = tauri::async_runtime::spawn_blocking(move || {
+                        loader.recovery.load(&loader.store, &load_id)
+                    })
+                    .await;
+                    match recording {
+                        Ok(Ok(recording)) if !token.is_cancelled() => {
+                            let job = Job { id, settings, target: Some(Err("Recovered recording: review and copy the transcript. Automatic paste is disabled.".into())), command: false, recovery_id: Some(clip_id) };
+                            spawn_process(st, job, recording, token);
+                        }
+                        Ok(Err(e)) => {
+                            let _ = st.tx.send(Message::Done(id, Box::new(Err(e))));
+                        }
+                        Err(_) => {
+                            let _ = st.tx.send(Message::Done(
+                                id,
+                                Box::new(Err("Saved audio could not be opened.".into())),
+                            ));
+                        }
+                        _ => {}
+                    }
+                });
+            }
             Message::Polishing(id) => {
                 if id == generation && !cancellation.is_cancelled() {
                     publish(&app, &state, |v| v.message = "Formatting your words".into());
@@ -795,11 +932,7 @@ async fn actor(
                         });
                         let st = state.clone();
                         let token = cancellation.clone();
-                        let tx = state.tx.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let result = process(st, s, recording, token).await;
-                            let _ = tx.send(Message::Done(id, Box::new(result)));
-                        });
+                        spawn_process(st, s.into(), recording, token);
                     }
                 }
             }
@@ -816,6 +949,15 @@ async fn actor(
                         schedule_hide(state.tx.clone(), id, 2500);
                     }
                     Ok(done) => {
+                        if let Some(clip_id) = done.recovery_id.clone() {
+                            let st = state.clone();
+                            let a = app.clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                if st.recovery.delete(&st.store, &clip_id).is_ok() {
+                                    let _ = a.emit_to("main", "recovery-updated", ());
+                                }
+                            });
+                        }
                         if done.preview {
                             let warning = done.warning.clone();
                             pending = finish_completed(&app, &state, id, done, false, warning);
@@ -943,6 +1085,7 @@ fn snapshot(state: State<Arc<AppState>>, app: tauri::AppHandle) -> Result<Snapsh
         snippets: state.store.get("snippets")?,
         styles: state.store.get("styles")?,
         history: state.store.history()?,
+        saved_audio: state.recovery.list(&state.store)?,
         scratchpad: state.store.get("scratchpad")?,
         view,
         startup_enabled: app.autolaunch().is_enabled().unwrap_or(false),
@@ -1008,6 +1151,37 @@ async fn available_models(state: State<'_, Arc<AppState>>) -> Result<Vec<String>
 #[tauri::command]
 fn delete_history(state: State<Arc<AppState>>, id: Option<String>) -> Result<(), String> {
     state.store.delete(id)
+}
+#[tauri::command]
+fn retry_audio(state: State<Arc<AppState>>, id: String) -> Result<(), String> {
+    if matches!(
+        state
+            .view
+            .lock()
+            .map_err(|_| "State unavailable")?
+            .phase
+            .as_str(),
+        "listening" | "processing" | "preview"
+    ) {
+        return Err("Finish or cancel the current dictation before retrying audio.".into());
+    }
+    state
+        .tx
+        .send(Message::Retry(id))
+        .map_err(|_| "Dictation engine unavailable".into())
+}
+#[tauri::command]
+async fn delete_saved_audio(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || st.recovery.delete(&st.store, &id))
+        .await
+        .map_err(|_| "Audio storage unavailable")??;
+    let _ = app.emit_to("main", "recovery-updated", ());
+    Ok(())
 }
 #[tauri::command]
 fn copy_text(text: String) -> Result<(), String> {
@@ -1150,6 +1324,8 @@ pub fn run() {
             microphones,
             available_models,
             delete_history,
+            retry_audio,
+            delete_saved_audio,
             copy_text,
             recover_text,
             action,
@@ -1189,6 +1365,7 @@ pub fn run() {
                 offline: Offline::new(app.path().app_local_data_dir()?.join("offline"))
                     .map_err(std::io::Error::other)?,
                 offline_cancel: Mutex::new(CancellationToken::new()),
+                recovery: Recovery::default(),
             });
             let (hook_tx, hook_rx) = mpsc::channel();
             if let Err(e) = native::start_hooks(&settings.shortcuts, hook_tx.clone()) {

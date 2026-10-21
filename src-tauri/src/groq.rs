@@ -62,7 +62,7 @@ impl Groq {
                 Err(e) => {
                     if attempt == 2 {
                         return Err(if e.is_timeout() {
-                            "Groq request timed out. Your recording was discarded; try again."
+                            "Groq request timed out. Please try again."
                         } else {
                             "Cannot reach Groq. Check your network and try again."
                         }
@@ -246,6 +246,12 @@ mod tests {
         sync::mpsc,
     };
     fn server(responses: Vec<(u16, &'static str, &'static str)>) -> (Groq, mpsc::Receiver<String>) {
+        server_delayed(responses, Duration::ZERO)
+    }
+    fn server_delayed(
+        responses: Vec<(u16, &'static str, &'static str)>,
+        delay: Duration,
+    ) -> (Groq, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (tx, rx) = mpsc::channel();
@@ -278,7 +284,8 @@ mod tests {
                     }
                 }
                 tx.send(String::from_utf8_lossy(&data).to_string()).unwrap();
-                write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",body.len()).unwrap();
+                std::thread::sleep(delay);
+                let _ = write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",body.len());
             }
         });
         let mut groq = Groq::new().unwrap();
@@ -318,6 +325,62 @@ mod tests {
                 model == "openai/gpt-oss-20b"
             );
         }
+    }
+    #[tokio::test]
+    async fn slow_speech_can_be_saved_encrypted_and_retried_without_a_late_result() {
+        use crate::{audio::Recording, deadline, recovery::Recovery, store::Store};
+        let (slow, request) = server_delayed(
+            vec![(200, "", r#"{"text":"Late result"}"#)],
+            Duration::from_secs(1),
+        );
+        let mut wav = vec![0; 64];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        let settings = Settings::default();
+        let token = CancellationToken::new();
+        let sent = wav.clone();
+        let speech_settings = &settings;
+        let result = deadline::run(Duration::from_millis(250), &token, |child| async move {
+            slow.transcribe("test-only-key", sent, speech_settings, "", &child)
+                .await
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), deadline::AUDIO_TIMEOUT);
+        assert!(request
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .contains("POST /audio/transcriptions"));
+        assert!(!token.is_cancelled());
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let recovery = Recovery::default();
+        let saved = recovery.save(
+            &store,
+            Recording {
+                wav: wav.clone(),
+                duration_ms: 1000,
+                limit_reached: false,
+                requires_review: false,
+                encoding_ms: 0,
+            },
+            true,
+        );
+        assert!(!saved.in_memory);
+        let loaded = recovery.load(&store, &saved.id).unwrap();
+        assert_eq!(loaded.wav, wav);
+        let (fast, request) = server(vec![(200, "", r#"{"text":"Recovered speech"}"#)]);
+        let speech = deadline::run(Duration::from_secs(2), &token, |child| async move {
+            fast.transcribe("test-only-key", loaded.wav, speech_settings, "", &child)
+                .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(speech.text, "Recovered speech");
+        assert!(request
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .contains("dictation.wav"));
+        recovery.delete(&store, &saved.id).unwrap();
+        assert!(recovery.list(&store).unwrap().is_empty());
     }
     #[tokio::test]
     async fn sends_documented_multipart_fields() {

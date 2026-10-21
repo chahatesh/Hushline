@@ -127,9 +127,35 @@ test('voice bar preview unfolds upward with an anchored base and respects reduce
   await page.getByRole('button',{name:'Preview active bar',exact:true}).scrollIntoViewIfNeeded();
   const rest=await pill.evaluate(e=>({y:e.offsetTop,height:e.offsetHeight}));
   await page.getByRole('button',{name:'Preview active bar',exact:true}).click();
-  await expect(pill).toHaveCSS('height','48px');
+  await expect(pill).toHaveCSS('height','32px');
   const active=await pill.evaluate(e=>({y:e.offsetTop,height:e.offsetHeight}));
   expect(active!.y).toBeLessThan(rest!.y);
   expect(Math.abs(active!.y+active!.height-rest!.y-rest!.height)).toBeLessThan(1);
-  await expect(pill.getByText('Listening',{exact:true})).toBeVisible();
+  await expect(pill.getByText('Listening',{exact:true})).toHaveCount(0);
+  await expect(pill.getByText('0:08',{exact:true})).toBeVisible();
+  const positions=await pill.evaluate(e=>{const t=e.querySelector('small')!.getBoundingClientRect(), x=e.querySelector('svg')!.getBoundingClientRect(), w=e.querySelector('.preview-wave')!.getBoundingClientRect(); return {timer:t.x, close:x.x, wave:w.x+w.width/2, center:e.getBoundingClientRect().x+e.clientWidth/2};});
+  expect(positions.timer).toBeLessThan(positions.close);
+  expect(positions.timer).toBeGreaterThan(positions.wave);
+  expect(Math.abs(positions.wave-positions.center)).toBeLessThan(1);
+});
+
+
+test('timeout preference persists and failed audio can be deleted from Home', async ({page}) => {
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('tab',{name:'Dictation',exact:true}).click();
+  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('5');
+  await page.getByLabel('Transcription timeout (seconds)').fill('12');
+  await page.getByRole('button',{name:'Save settings',exact:true}).click();
+  await page.reload();
+  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('tab',{name:'Dictation',exact:true}).click();
+  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('12');
+  await page.evaluate(()=>{const key='hushline-browser-preview-v1', data=JSON.parse(localStorage.getItem(key)!);data.savedAudio=[{id:'ui-metadata-only',createdAt:new Date().toISOString(),durationMs:8000,requiresReview:false,inMemory:true}];localStorage.setItem(key,JSON.stringify(data));});
+  await page.reload();
+  await expect(page.getByRole('heading',{name:/Saved audio/})).toBeVisible();
+  await expect(page.getByText('Memory only · lost when Hush quits')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Retry',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'Delete saved audio'}).click();
+  await page.getByRole('button',{name:'Delete permanently'}).click();
+  await expect(page.getByRole('heading',{name:/Saved audio/})).toHaveCount(0);
 });

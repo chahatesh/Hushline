@@ -1,0 +1,43 @@
+{
+  "version": "0.3.3",
+  "testedAt": "2026-10-21T01:12:43.723489+00:00",
+  "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
+  "tests": {
+    "rust": {
+      "passed": 66,
+      "ignored": 14,
+      "failed": 0
+    },
+    "typescript": {
+      "passed": 5
+    },
+    "browser": {
+      "passed": 12
+    },
+    "formattingClippyLint": true,
+    "nativeNonactivation": true,
+    "nativeCollapseAndCloseControl": true,
+    "renderedPixelsInspected": true,
+    "slowSpeechHttpFixtureEncryptedSaveRetry": true,
+    "dpapiRestartPrivateRetentionExpiry": true
+  },
+  "policy": {
+    "speechDeadlineSeconds": 5,
+    "speechDeadlineRangeSeconds": [
+      3,
+      120
+    ],
+    "cleanupDeadlineSeconds": 5,
+    "commandEditingDeadlineSeconds": 10,
+    "maximumRecoveryClips": 3,
+    "recoveryExpiryDays": 7,
+    "privateAudioPersisted": false,
+    "retryAutomaticPaste": false
+  },
+  "initialFailure": "One native foreground comparison changed between two windows owned by another application. The unchanged test passed on rerun.",
+  "limits": [
+    "No live slow Groq microphone/timeout/retry acceptance",
+    "No live target insertion/clipboard restoration acceptance",
+    "No physical mixed-DPI/multi-monitor acceptance"
+  ]
+}

@@ -1,9 +1,9 @@
 {
-  "version": "0.3.2",
+  "version": "0.3.3",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
   "testedAt": "2026-10-21T00:31:06.4156964Z",
-  "evidence": "docs/QA.md and docs/verification/*0.3.2.json record real brief-gap captures, substantial-loss handling, native cursor/collapse, packaged ordinary microphone capture without a review warning, settings/key preservation, installer coexistence/uninstall and background measurements. Live speech-to-target, clipboard restoration, selected-text and physical mixed-monitor acceptance remain incomplete; the public release gate stays closed.",
+  "evidence": "0.3.3 implements a bounded speech deadline, encrypted failed-audio recovery and a simplified voice bar. Component and packaged checks are recorded in docs/QA.md and docs/verification/*0.3.3.json. Live slow-response timeout/retry, speech-to-target, clipboard restoration, selected-text and physical mixed-monitor acceptance remain incomplete; the public release gate stays closed.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,

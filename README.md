@@ -5,7 +5,7 @@
 
 Hush is an independent, open-source Windows dictation application built with Rust, Tauri 2, and SolidJS. Hold a shortcut, say what you mean, and insert the result in the field where you were working. Choose Groq cloud recognition with your own API key, or download a local Whisper pack for offline dictation. Local automatic layout adds notes, bullets, and paragraphs without another AI call.
 
-**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The 0.3.2 build averaged 18.93 MiB working set and 4.08 MiB private memory in one documented 20-sample background run with stopped microphone preparation enabled; an open dashboard or active local model adds resource use. Silent installation, native settings/key preservation, microphone stopping/cancellation, and dashboard close/reopen passed. A public Groq speech fixture also passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
+**Release status: pre-release, with live acceptance pending.** The native pipeline and desktop interface are implemented, but live speech → Groq → insertion has not been verified in this environment. Do not treat this as a production-complete Wispr Flow replacement. The previous 0.3.2 build averaged 18.93 MiB working set and 4.08 MiB private memory in one documented 20-sample background run with stopped microphone preparation enabled; an open dashboard or active local model adds resource use. Silent installation, native settings/key preservation, microphone stopping/cancellation, and dashboard close/reopen passed. A public Groq speech fixture also passed. The exact feature and test status is recorded in [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
 
 Hush was formerly named Hushline. The existing repository URL, application identifier, database name, credential slot, startup entry and executable name are retained for compatibility; saved keys and preferences stay in place.
 
@@ -13,10 +13,15 @@ Hush is not affiliated with, endorsed by, or an official product of Wispr Flow. 
 
 ![Hush dashboard, empty browser interface preview](docs/screenshots/home.png)
 
+Native active voice bar (rendered on Windows):
+
+![Hush native pill with centered waveform, timer and close control](docs/screenshots/native-pill.png)
+
 ## What is here
 
 - Push-to-talk, hands-free recording, editable shortcuts, optional double-tap activation, Escape cancellation, tray lifecycle, and a nonactivating waveform overlay.
 - A smooth-edged voice pill without a mic icon, unfolding upward as one surface with violet/turquoise activity feedback. Fast startup prepares a stopped microphone client; the recorder reads audio only after activation. Default recordings allow ten minutes, with silence stopping optional.
+- A five-second speech deadline (adjustable in Dictation settings). Timeouts cancel the request, show “audio was unable to process, please try again.” above the pill, and save the recording for Retry/Delete in Home. Retries return reviewable text and never paste into an old selection.
 - Native WASAPI capture (CPAL enumerates devices), energy-based silence detection, bounded recording duration, in-memory 16 kHz mono WAV encoding, and asynchronous Groq speech requests. Brief microphone hiccups keep normal dictation working. Substantial audio loss holds the available speech for review.
 - Optional offline Whisper Tiny/Base packs with verified downloads, local notes/bullets/paragraph layout, and optional editing through an installed local Ollama model. Tiny file transcription was tested; live offline delivery and Ollama editing remain unverified.
 - Fast mode by default: Whisper transcription → conservative local cleanup → insertion. Always / Sometimes / Never controls automatic AI polish; Never overrides app styles. Exact-word mode and snippets bypass it. Command Mode is separate.
@@ -30,8 +35,8 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. The installer uses a unique Windows registration and “Hush Dictation” shortcuts to avoid overwriting other apps named Hush. Earlier Hushline installations may be removed normally after testing Hush; keep app data when prompted. Locally built artifacts, when generated, are in:
 
-- `src-tauri/target/release/bundle/nsis/Hush_0.3.2_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
-- `artifacts/Hush_0.3.2_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
+- `src-tauri/target/release/bundle/nsis/Hush_0.3.3_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
+- `artifacts/Hush_0.3.3_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
 The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key and clear history in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 
@@ -103,9 +108,9 @@ A snippet expands only when its trigger is the entire utterance. It supports mul
 
 ## Privacy
 
-The key is stored in Windows Credential Manager, not in SQLite, frontend assets, environment files, or logs. Your current Windows account is the trust boundary. Raw audio stays in memory and is released after processing/cancellation; it is never saved to an audio file. Audio already uploaded cannot be recalled by cancelling.
+The key is stored in Windows Credential Manager, not in SQLite, frontend assets, environment files, or logs. Your current Windows account is the trust boundary. Successful and cancelled recordings stay in memory and are released. Failed recordings are kept for retry: up to three clips for seven days, encrypted with Windows DPAPI inside SQLite. Private mode keeps failed clips in memory only until deletion or exit. Home offers Retry and Delete; a successful retry deletes its recovery audio. Configuration backups exclude recovery audio. Only recovery audio is encrypted; transcript history and settings are not. Audio already uploaded cannot be recalled by cancelling.
 
-In cloud mode, audio is sent to Groq for dictation. In offline mode, it is piped to a local whisper.cpp process, with no cloud fallback. The local engine writes a temporary JSON transcript (no raw audio); it is deleted after processing. Offline models live under `%LOCALAPPDATA%\io.chahatesh.hushline\offline`. Text goes to Groq only for enabled AI processing or Command Mode; vocabulary hints also accompany speech requests. Groq's own data policies apply. Hush has no telemetry or cloud history store. Local data lives in `%APPDATA%\io.chahatesh.hushline\hushline.sqlite` (the Tauri user app-data directory); it is not database-encrypted. Disable local history for private mode and clear existing records separately. Configuration backups exclude API keys, history, and scratchpad content.
+In cloud mode, audio is sent to Groq for dictation. In offline mode, it is piped to a local whisper.cpp process, with no cloud fallback. The local engine writes a temporary JSON transcript (no raw audio); it is deleted after processing. Offline models live under `%LOCALAPPDATA%\io.chahatesh.hushline\offline`. Text goes to Groq only for enabled AI processing or Command Mode; vocabulary hints also accompany speech requests. Groq's own data policies apply. Hush has no telemetry or cloud history store. Local data lives in `%APPDATA%\io.chahatesh.hushline\hushline.sqlite` (the Tauri user app-data directory); it is not database-encrypted. Disable local history for private mode and clear existing records separately. Configuration backups exclude API keys, history, recovery audio, and scratchpad content.
 
 Clipboard mode snapshots supported global-memory formats, refuses unsafe/oversized snapshots, and restores only if the clipboard sequence still matches. It leaves newer copied content alone. Some apps read clipboard contents asynchronously, so universal paste verification is not possible. Compatibility Unicode typing is opt-in and avoids clipboard changes; paste is the default. It preserves multiline output for copying instead of typing Enter, which could submit a message; choose clipboard insertion for multiline paste. Delivery is reported conservatively; check your text before sending it.
 
@@ -154,6 +159,7 @@ No Groq key is needed to compile or run automated unit tests. Loopback HTTP fixt
 | Symptom | What to check |
 | --- | --- |
 | No microphone or capture failure | Reconnect the device, refresh the list, check Windows microphone permissions, and save another input selection. |
+| “audio was unable to process, please try again.” | Speech recognition exceeded the default five-second deadline. Open Home → Saved audio to retry. For long/offline recordings, increase Settings → Dictation → Transcription timeout (3–120 seconds). Optional AI cleanup has a separate five-second fallback; Command Mode editing has a ten-second deadline. |
 | Substantial audio loss | Keep speaking. A measured gap of at least 250 ms, or 500 ms total, pauses snippets/automatic AI polish and holds the transcript for review/copy. Brief hiccups do not block paste. Lost audio cannot be reconstructed. |
 | No speech detected | Test the microphone, speak for longer than a quick tap, or lower the activity threshold slightly. This is energy detection; noise can also count as activity. |
 | Key rejected | Replace the key in Settings and verify it with Groq model discovery. |

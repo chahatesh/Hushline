@@ -42,6 +42,7 @@ pub struct Settings {
     pub context_enabled: bool,
     pub selection_permission: bool,
     pub max_seconds: u32,
+    pub transcription_timeout_seconds: u32,
     pub silence_seconds: u32,
     pub vad_threshold: f32,
     pub double_tap: bool,
@@ -72,6 +73,7 @@ impl Default for Settings {
             context_enabled: false,
             selection_permission: false,
             max_seconds: 600,
+            transcription_timeout_seconds: 5,
             silence_seconds: 0,
             vad_threshold: 0.012,
             double_tap: false,
@@ -121,6 +123,9 @@ impl Settings {
         }
         if !(5..=600).contains(&self.max_seconds) {
             return Err("Maximum recording must be 5–600 seconds.".into());
+        }
+        if !(3..=120).contains(&self.transcription_timeout_seconds) {
+            return Err("Transcription timeout must be 3–120 seconds.".into());
         }
         if self.silence_seconds != 0 && !(2..=60).contains(&self.silence_seconds) {
             return Err("Silence timeout must be off, or 2–60 seconds.".into());
@@ -243,6 +248,7 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub saved_audio: Vec<crate::recovery::SavedAudio>,
     pub offline: crate::offline::Status,
     pub settings: Settings,
     pub dictionary: Vec<Entry>,
@@ -299,6 +305,19 @@ mod tests {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!json.contains("apiKey"));
         assert!(!json.contains("gsk_"));
+    }
+    #[test]
+    fn transcription_deadline_defaults_and_bounds_survive_upgrade() {
+        let mut settings: Settings = serde_json::from_str(r#"{"preferencesVersion":4}"#).unwrap();
+        assert_eq!(settings.transcription_timeout_seconds, 5);
+        for seconds in [0, 2, 121, u32::MAX] {
+            settings.transcription_timeout_seconds = seconds;
+            assert!(settings.validate().is_err());
+        }
+        for seconds in [3, 5, 120] {
+            settings.transcription_timeout_seconds = seconds;
+            assert!(settings.validate().is_ok());
+        }
     }
     #[test]
     fn legacy_settings_upgrade_to_paste_once_without_losing_the_shortcut() {

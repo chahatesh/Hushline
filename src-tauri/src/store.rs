@@ -10,8 +10,60 @@ impl Store {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         conn.busy_timeout(std::time::Duration::from_secs(3))
             .map_err(|e| e.to_string())?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, record TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS recovery_audio (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, metadata TEXT NOT NULL, audio BLOB NOT NULL); PRAGMA user_version=2;").map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM recovery_audio WHERE created_at < ?1",
+            [audio_cutoff()],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Self(Mutex::new(conn)))
+    }
+    pub fn save_audio(&self, info: &crate::recovery::SavedAudio, data: &[u8]) -> Result<()> {
+        let mut c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let tx = c.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO recovery_audio VALUES(?1,?2,?3,?4)",
+            params![
+                info.id,
+                info.created_at,
+                serde_json::to_string(info).map_err(|e| e.to_string())?,
+                data
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM recovery_audio WHERE created_at < ?1 OR id NOT IN (SELECT id FROM recovery_audio ORDER BY created_at DESC LIMIT ?2)", params![audio_cutoff(), crate::recovery::MAX_CLIPS]).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+    pub fn saved_audios(&self) -> Result<Vec<crate::recovery::SavedAudio>> {
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        c.execute(
+            "DELETE FROM recovery_audio WHERE created_at < ?1",
+            [audio_cutoff()],
+        )
+        .map_err(|e| e.to_string())?;
+        let mut stmt = c.prepare("SELECT metadata FROM recovery_audio WHERE created_at >= ?1 ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([audio_cutoff()], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| {
+            serde_json::from_str(&r.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        })
+        .collect()
+    }
+    pub fn saved_audio(&self, id: &str) -> Result<(crate::recovery::SavedAudio, Vec<u8>)> {
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let (metadata, data): (String, Vec<u8>) = c.query_row("SELECT metadata,audio FROM recovery_audio WHERE id=?1 AND created_at>=?2 AND length(audio)<=24004096", params![id,audio_cutoff()], |r| Ok((r.get(0)?,r.get(1)?))).map_err(|_| "This saved recording is no longer available.")?;
+        Ok((
+            serde_json::from_str(&metadata).map_err(|_| "Invalid saved recording.")?,
+            data,
+        ))
+    }
+    pub fn delete_audio(&self, id: &str) -> Result<()> {
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        c.execute("DELETE FROM recovery_audio WHERE id=?1", [id])
+            .map_err(|e| e.to_string())?;
+        c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| e.to_string())
     }
     pub fn get<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> Result<T> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
@@ -86,10 +138,47 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 }
+fn audio_cutoff() -> String {
+    (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339()
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expired_audio_cannot_be_read_and_is_removed_on_access() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let info = crate::recovery::SavedAudio {
+            id: "expired".into(),
+            created_at: "2000-01-01T00:00:00+00:00".into(),
+            duration_ms: 1000,
+            requires_review: false,
+            in_memory: false,
+        };
+        store
+            .0
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO recovery_audio VALUES(?1,?2,?3,?4)",
+                params![
+                    info.id,
+                    info.created_at,
+                    serde_json::to_string(&info).unwrap(),
+                    b"encrypted test bytes".as_slice()
+                ],
+            )
+            .unwrap();
+        assert!(store.saved_audio(&info.id).is_err());
+        assert!(store.saved_audios().unwrap().is_empty());
+        let count: i64 = store
+            .0
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM recovery_audio", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
     #[test]
     fn invalid_restore_leaves_existing_data_untouched() {
         let s = Store::open(Path::new(":memory:")).unwrap();

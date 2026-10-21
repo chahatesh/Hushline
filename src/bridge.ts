@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { defaults, emptyView, type Snapshot, type Backup, type Settings } from './types';
 export const desktop = isTauri();
 const previewKey = 'hushline-browser-preview-v1';
-function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
+function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], savedAudio: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
 function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) { const parsed = JSON.parse(stored); return { ...initial(), ...parsed, settings: { ...defaults, ...parsed.settings }, view: { ...emptyView } }; } } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
 export async function call<T = void>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (desktop) return invoke<T>(command, args);
@@ -19,6 +19,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
     case 'save_scratchpad': data.scratchpad = String(args.content); break;
     case 'microphones': result = []; break;
     case 'set_shortcut_capture': break;
+    case 'delete_saved_audio': data.savedAudio = data.savedAudio.filter(a => a.id !== args.id); break;
     case 'delete_history': data.history = args.id ? data.history.filter(t => t.id !== args.id) : []; break;
     case 'export_configuration': result = { version: 1, settings: data.settings, dictionary: data.dictionary, snippets: data.snippets, styles: data.styles } satisfies Backup; break;
     case 'import_configuration': {

@@ -348,7 +348,7 @@ fn dock_id(value: &str) -> u8 {
 fn dimensions(active: bool, side: bool) -> (f64, f64) {
     match (active, side) {
         (false, false) => (48.0, 16.0),
-        (true, false) => (168.0, 48.0),
+        (true, false) => (168.0, 32.0),
         (false, true) => (16.0, 48.0),
         (true, true) => (40.0, 128.0),
     }
@@ -356,9 +356,9 @@ fn dimensions(active: bool, side: bool) -> (f64, f64) {
 fn visible_dimensions(active: bool, side: bool, compact: bool) -> (f64, f64) {
     if active && compact {
         if side {
-            (28.0, 88.0)
+            (40.0, 112.0)
         } else {
-            (96.0, 28.0)
+            (168.0, 28.0)
         }
     } else {
         dimensions(active, side)
@@ -486,7 +486,7 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     let card_height = notice_height(hwnd, p, &notice, card_width);
     if card_height > 0 {
         let full_width = width.max(card_width);
-        let footer = (48.0 * scale) as i32;
+        let footer = (32.0 * scale) as i32;
         let full_height = footer + card_height;
         rect.left = match dock {
             1 => x,
@@ -679,9 +679,10 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     fonts(hwnd, p);
     let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
     let active = view.phase != "idle" && !view.phase.is_empty();
-    let compact = active && p.presentation.borrow().compact;
     let expanded = p.notice.get().bottom > 0;
-    let side = matches!(dock_id(&view.dock), 1 | 2) && !expanded;
+    // A new dock may be queued while an old paint is pending. Draw the
+    // orientation that owns the current geometry until positioning catches up.
+    let side = matches!(p.layout.get().1, 1 | 2) && !expanded;
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let mut client = RECT::default();
@@ -710,7 +711,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     let scale = p.dpi.get() as f64 / 96.0;
     let w = width as f64 / scale;
     let footer = if expanded {
-        (48.0 * scale) as i32
+        (32.0 * scale) as i32
     } else {
         height
     };
@@ -819,7 +820,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             if side {
                 shape(
                     (w - amplitude) / 2.0,
-                    wave_origin(h) + i as f64 * 5.0,
+                    wave_origin(h - 36.0) + i as f64 * 5.0,
                     amplitude,
                     2.6,
                     color,
@@ -827,7 +828,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             } else {
                 shape(
                     wave_origin(w) + i as f64 * 5.0,
-                    (if compact { h / 2.0 } else { 32.0 }) - amplitude / 2.0,
+                    h / 2.0 - amplitude / 2.0,
                     2.6,
                     amplitude,
                     color,
@@ -837,62 +838,37 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         let (cx, cy) = if side {
             (w / 2.0, h - 16.0)
         } else {
-            (w - 17.0, 32.0)
+            (w - 16.0, h / 2.0)
         };
-        if !compact {
+        {
             for i in -4..=4 {
                 let v = i as f64 * 0.65;
                 shape(cx + v - 0.6, cy + v - 0.6, 1.2, 1.2, ink);
                 shape(cx + v - 0.6, cy - v - 0.6, 1.2, 1.2, ink);
             }
         }
-        if !side && !compact {
-            let status = match view.phase.as_str() {
-                "listening" if view.message == "Starting microphone" => "Getting ready",
-                "listening" => "Listening",
-                "processing" if view.message == "Formatting your words" => "Polishing",
-                "processing" => "Transcribing",
-                "success" => "Done",
-                "error" => "Open Hush for help",
-                _ => "Review your edit",
-            };
-            let timer = if view.phase == "listening" && view.message != "Starting microphone" {
-                format!(
-                    "{}:{:02}",
-                    view.seconds as u32 / 60,
-                    view.seconds as u32 % 60
-                )
-            } else if view.phase == "processing" {
-                "…".into()
-            } else {
-                String::new()
-            };
-            let _ = SetBkMode(dc, TRANSPARENT);
-            text(
-                dc,
-                status,
-                RECT {
-                    left: (15.0 * scale) as i32,
-                    top: top + (3.0 * scale) as i32,
-                    right: width - (14.0 * scale) as i32,
-                    bottom: top + (21.0 * scale) as i32,
-                },
-                p.small.get(),
-                rgb(255, 255, 255),
-            );
-            text(
-                dc,
-                &timer,
-                RECT {
-                    left: (15.0 * scale) as i32,
-                    top: top + (23.0 * scale) as i32,
-                    right: (49.0 * scale) as i32,
-                    bottom: height - (4.0 * scale) as i32,
-                },
-                p.small.get(),
-                rgb(255, 255, 255),
-            );
-        }
+        let timer = format!(
+            "{}:{:02}",
+            view.seconds as u32 / 60,
+            view.seconds as u32 % 60
+        );
+        let rect = if side {
+            RECT {
+                left: (4.0 * scale) as i32,
+                top: top + ((h - 39.0) * scale) as i32,
+                right: width - (4.0 * scale) as i32,
+                bottom: top + ((h - 24.0) * scale) as i32,
+            }
+        } else {
+            RECT {
+                left: ((w - 58.0) * scale) as i32,
+                top: top + ((h - 15.0) / 2.0 * scale) as i32,
+                right: width - (28.0 * scale) as i32,
+                bottom: top + ((h + 15.0) / 2.0 * scale) as i32,
+            }
+        };
+        let _ = SetBkMode(dc, TRANSPARENT);
+        text(dc, &timer, rect, p.small.get(), rgb(255, 255, 255));
     }
     if expanded && top > 0 {
         let padding = (14.0 * scale) as i32;
@@ -945,7 +921,17 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     );
     p.paint_ok.set(painted.is_ok());
     #[cfg(test)]
-    if active && p.alpha.get() == 255 && p.transition.get().is_none() {
+    if active
+        && p.alpha.get() == 255
+        && p.transition.get().is_none()
+        && p.layout.get()
+            == (
+                active,
+                dock_id(&view.dock),
+                notice_id(&view),
+                p.presentation.borrow().compact,
+            )
+    {
         if let Some(directory) = std::env::var_os("HUSHLINE_OVERLAY_CAPTURE_DIR") {
             let directory = std::path::PathBuf::from(directory);
             let _ = std::fs::create_dir_all(&directory);
@@ -1107,16 +1093,14 @@ unsafe extern "system" fn procedure(
             let scale = p.dpi.get() as f64 / 96.0;
             let pill = p.pill.get();
             let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
-            let compact = p.presentation.borrow().compact;
             let cancel = in_pill
-                && !compact
                 && view.phase != "idle"
                 && if side {
                     y >= client.bottom - (30.0 * scale) as i32
                 } else {
                     x >= pill.right - (28.0 * scale) as i32
                 };
-            let action = if cancel || (compact && view.phase == "processing") {
+            let action = if cancel || (in_pill && view.phase == "processing") {
                 Action::Cancel
             } else if !in_pill || view.phase == "error" || view.phase == "preview" {
                 Action::Open
@@ -1396,7 +1380,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(bounds.right - bounds.left, (168.0 * scale) as i32);
-        assert_eq!(bounds.bottom - bounds.top, (48.0 * scale) as i32);
+        assert_eq!(bounds.bottom - bounds.top, (32.0 * scale) as i32);
         let surface_count = unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 };
         for _ in 0..20 {
             unsafe {
@@ -1481,7 +1465,7 @@ mod tests {
     #[ignore = "Shows the real native bar for three seconds; no microphone or network."]
     fn native_overlay_collapses_without_stopping_recording() {
         let before = unsafe { GetForegroundWindow() };
-        let (tx, _) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         start(tx).unwrap();
         configure(&Settings::default());
         update(&View {
@@ -1519,7 +1503,7 @@ mod tests {
             GetWindowRect(hwnd, &mut compact).unwrap()
         };
         let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64 / 96.0;
-        assert_eq!(compact.right - compact.left, (96.0 * scale) as i32);
+        assert_eq!(compact.right - compact.left, (168.0 * scale) as i32);
         assert_eq!(compact.bottom - compact.top, (28.0 * scale) as i32);
         assert_eq!(initial.bottom, compact.bottom);
         assert_eq!(bridge.view.lock().unwrap().phase, "listening");
@@ -1533,9 +1517,24 @@ mod tests {
                 GetWindowRect(hwnd, &mut compact).unwrap();
                 SendMessageW(hwnd, WM_PAINT, None, None);
             }
-            assert_eq!(compact.right - compact.left, (28.0 * scale) as i32);
-            assert_eq!(compact.bottom - compact.top, (88.0 * scale) as i32);
+            assert_eq!(compact.right - compact.left, (40.0 * scale) as i32);
+            assert_eq!(compact.bottom - compact.top, (112.0 * scale) as i32);
         }
+        // The visible close control must remain clickable after contraction.
+        let x = (20.0 * scale) as u32;
+        let y = (96.0 * scale) as u32;
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_LBUTTONUP,
+                None,
+                Some(LPARAM(((y << 16) | x) as isize)),
+            );
+        }
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Action::Cancel
+        );
         assert_eq!(unsafe { GetForegroundWindow() }, before);
     }
 }
