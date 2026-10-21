@@ -2,10 +2,10 @@
   "version": "0.3.2",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-21T00:13:36.1570024Z",
-  "evidence": "See docs/QA.md and docs/verification/*0.3.2.json. This correction distinguishes brief microphone hiccups from substantial loss and adds native cursor/timed-collapse checks. Packaged validation is recorded after execution; live speech-to-target, real clipboard restoration and physical mixed-monitor acceptance remain incomplete.",
+  "testedAt": "2026-10-21T00:31:06.4156964Z",
+  "evidence": "docs/QA.md and docs/verification/*0.3.2.json record real brief-gap captures, substantial-loss handling, native cursor/collapse, packaged ordinary microphone capture without a review warning, settings/key preservation, installer coexistence/uninstall and background measurements. Live speech-to-target, clipboard restoration, selected-text and physical mixed-monitor acceptance remain incomplete; the public release gate stays closed.",
   "checks": {
-    "installLaunch": false,
+    "installLaunch": true,
     "saveKey": false,
     "selectMicrophone": false,
     "pushToTalkNotepad": false,

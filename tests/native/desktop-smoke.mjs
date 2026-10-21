@@ -69,6 +69,8 @@ try {
   await native(main,'action',{name:'test'});
   const stopped=await waitFor(async()=>{const view=(await native(main,'snapshot')).view;return view.phase!=='listening'?view:false;});
   assert(stopped.phase==='success'||stopped.message.includes("couldn't hear any speech"),`Microphone Stop failed: ${stopped.message}`);
+  report.checks.nativeOrdinaryCaptureNoReviewWarning=!stopped.warning;
+  assert(report.checks.nativeOrdinaryCaptureNoReviewWarning,`Ordinary microphone capture unexpectedly required review: ${stopped.warning}`);
   assert.equal((await native(main,'snapshot')).history.length,baselineHistory);
   report.checks.nativeMicrophoneNormalStopNoUpload=stopped.phase==='success'?'passed: WAV completed':'passed: silent recording rejected';
   await native(main,'action',{name:'cancel'});
