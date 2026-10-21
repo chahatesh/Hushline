@@ -2,7 +2,7 @@
   "version": "0.3.3",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-21T00:31:06.4156964Z",
+  "testedAt": "2026-10-21T01:22:41.811333+00:00",
   "evidence": "0.3.3 implements a bounded speech deadline, encrypted failed-audio recovery and a simplified voice bar. Component and packaged checks are recorded in docs/QA.md and docs/verification/*0.3.3.json. Live slow-response timeout/retry, speech-to-target, clipboard restoration, selected-text and physical mixed-monitor acceptance remain incomplete; the public release gate stays closed.",
   "checks": {
     "installLaunch": true,

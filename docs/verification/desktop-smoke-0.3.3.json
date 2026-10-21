@@ -1,0 +1,21 @@
+{
+  "configuration": "release executable, test-only CDP, actual native IPC",
+  "desktopBootObservedMs": 7481,
+  "checks": {
+    "nativeSnapshot": true,
+    "noSecretInSettings": true,
+    "nativePolishPolicyPersistence": true,
+    "nativeTranscriptionDeadlinePersistence": true,
+    "recoveryMetadataOnly": true,
+    "nativeDictionaryPersisted": true,
+    "nativeCredentialUIRoundtrip": "skipped: existing key preserved",
+    "microphoneTestStage": "waiting for frames",
+    "nativeMicrophoneTestCancel": true,
+    "nativeOrdinaryCaptureNoReviewWarning": true,
+    "nativeMicrophoneNormalStopNoUpload": "passed: silent recording rejected",
+    "nativeBackupExcludesSensitiveData": true,
+    "liveGroqToNotepad": "not tested: no live provider request; native insertion harness could not acquire foreground",
+    "nativeDashboardCloseTrayAndReopen": true
+  },
+  "error": null
+}

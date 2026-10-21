@@ -1,0 +1,17 @@
+{
+  "version": "0.3.3",
+  "sourceImplementation": "392b3b9b09a93af8c8cbd1e3c9f5fbb7ac7e885a",
+  "releaseGatePassed": false,
+  "artifacts": [
+    {
+      "name": "Hush_0.3.3_x64-setup.exe",
+      "bytes": 2829576,
+      "sha256": "23292db07cfa763074f6b1588ad015373895e3d6f43475b21386da6cc6196203"
+    },
+    {
+      "name": "Hush_0.3.3_x64_portable.zip",
+      "bytes": 3571433,
+      "sha256": "0e41642c546756397aef889e5eff8bc97c92fdb3dee3f7cfa1a5275bfbe43270"
+    }
+  ]
+}
