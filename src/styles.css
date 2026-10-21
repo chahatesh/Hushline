@@ -184,8 +184,8 @@
 
 @layer components {
  .pill-preview .preview-status { position:absolute; top:5px; left:15px; font-size:11px; }
- .pill-preview.expanded .preview-wave { position:absolute; left:15px; bottom:9px; height:16px; }
- .pill-preview.expanded small { position:absolute; left:95px; bottom:9px; }
+ .pill-preview.expanded .preview-wave { position:absolute; left:50%; transform:translateX(-50%); bottom:9px; height:16px; }
+ .pill-preview.expanded small { position:absolute; left:15px; bottom:9px; }
  .pill-preview.expanded svg { position:absolute; right:12px; bottom:10px; }
  .preview-wave i:nth-child(n+4) { background:#3eead2; }
  .dock-preview.dock-left .preview-status,.dock-preview.dock-right .preview-status { display:none; }

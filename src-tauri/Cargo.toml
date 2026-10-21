@@ -1,6 +1,6 @@
 [package]
 name = "hushline"
-version = "0.3.1"
+version = "0.3.2"
 description = "Private by choice, fast by design. Windows dictation powered by Groq."
 authors = ["Chahatesh"]
 license = "MIT"

@@ -17,7 +17,7 @@ Hush is not affiliated with, endorsed by, or an official product of Wispr Flow. 
 
 - Push-to-talk, hands-free recording, editable shortcuts, optional double-tap activation, Escape cancellation, tray lifecycle, and a nonactivating waveform overlay.
 - A smooth-edged voice pill without a mic icon, unfolding upward as one surface with violet/turquoise activity feedback. Fast startup prepares a stopped microphone client; the recorder reads audio only after activation. Default recordings allow ten minutes, with silence stopping optional.
-- Native WASAPI capture (CPAL enumerates devices), energy-based silence detection, bounded recording duration, in-memory 16 kHz mono WAV encoding, and asynchronous Groq speech requests. Audio gaps preserve available speech for review rather than automatically pasting an incomplete transcript.
+- Native WASAPI capture (CPAL enumerates devices), energy-based silence detection, bounded recording duration, in-memory 16 kHz mono WAV encoding, and asynchronous Groq speech requests. Brief microphone hiccups keep normal dictation working. Substantial audio loss holds the available speech for review.
 - Optional offline Whisper Tiny/Base packs with verified downloads, local notes/bullets/paragraph layout, and optional editing through an installed local Ollama model. Tiny file transcription was tested; live offline delivery and Ollama editing remain unverified.
 - Fast mode by default: Whisper transcription → conservative local cleanup → insertion. Always / Sometimes / Never controls automatic AI polish; Never overrides app styles. Exact-word mode and snippets bypass it. Command Mode is separate.
 - Windows protection/focus checks, default one-action clipboard paste with guarded restoration, optional compatibility Unicode typing, and last-transcript recovery. Changed/unknown targets retain text for manual paste.
@@ -30,8 +30,8 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. The installer uses a unique Windows registration and “Hush Dictation” shortcuts to avoid overwriting other apps named Hush. Earlier Hushline installations may be removed normally after testing Hush; keep app data when prompted. Locally built artifacts, when generated, are in:
 
-- `src-tauri/target/release/bundle/nsis/Hush_0.3.1_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
-- `artifacts/Hush_0.3.1_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
+- `src-tauri/target/release/bundle/nsis/Hush_0.3.2_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
+- `artifacts/Hush_0.3.2_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
 The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key and clear history in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 
@@ -154,7 +154,7 @@ No Groq key is needed to compile or run automated unit tests. Loopback HTTP fixt
 | Symptom | What to check |
 | --- | --- |
 | No microphone or capture failure | Reconnect the device, refresh the list, check Windows microphone permissions, and save another input selection. |
-| Audio briefly dropped | Keep speaking. Hush keeps the available speech, pauses snippets/automatic AI polish, and holds the result for review/copy instead of automatic paste. Lost audio cannot be reconstructed. Try a different microphone if it repeats. |
+| Substantial audio loss | Keep speaking. A measured gap of at least 250 ms, or 500 ms total, pauses snippets/automatic AI polish and holds the transcript for review/copy. Brief hiccups do not block paste. Lost audio cannot be reconstructed. |
 | No speech detected | Test the microphone, speak for longer than a quick tap, or lower the activity threshold slightly. This is energy detection; noise can also count as activity. |
 | Key rejected | Replace the key in Settings and verify it with Groq model discovery. |
 | Rate limit | Wait before retrying; check your Groq account's actual limits. Hush caps automatic retries and honors long retry delays by returning an error. |

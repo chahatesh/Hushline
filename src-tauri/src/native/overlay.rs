@@ -34,6 +34,7 @@ struct Bridge {
 }
 #[derive(Clone, Default)]
 struct OverlayView {
+    generation: u64,
     phase: String,
     message: String,
     warning: String,
@@ -41,6 +42,31 @@ struct OverlayView {
     seconds: f32,
     dock: String,
     theme: String,
+}
+const DETAILS_MS: u32 = 2500;
+#[derive(Default)]
+struct Presentation {
+    generation: u64,
+    active: bool,
+    notice: u64,
+    compact: bool,
+}
+impl Presentation {
+    fn sync(&mut self, view: &OverlayView) -> bool {
+        let active = view.phase != "idle" && !view.phase.is_empty();
+        let notice = notice_id(view);
+        let expand = active
+            && (!self.active
+                || self.generation != view.generation
+                || (self.notice != notice && !notice_text(view).is_empty()));
+        if !active || expand {
+            self.compact = false;
+        }
+        self.generation = view.generation;
+        self.active = active;
+        self.notice = notice;
+        expand
+    }
 }
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
 struct Painter {
@@ -53,7 +79,10 @@ struct Painter {
     animated: bool,
     alpha: Cell<u8>,
     paint_ok: Cell<bool>,
-    layout: Cell<(bool, u8, u64)>,
+    layout: Cell<(bool, u8, u64, bool)>,
+    presentation: RefCell<Presentation>,
+    expanding: Cell<bool>,
+    details_deadline: Cell<Option<Instant>>,
     pill: Cell<RECT>,
     notice: Cell<RECT>,
     from: Cell<RECT>,
@@ -151,6 +180,7 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             lpfnWndProc: Some(procedure),
             hInstance: instance,
             lpszClassName: w!("HushNativeOverlay"),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             ..Default::default()
         };
         if RegisterClassW(&class) == 0 {
@@ -175,7 +205,10 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             animated: animations.as_bool(),
             alpha: Cell::new(165),
             paint_ok: Cell::new(false),
-            layout: Cell::new((false, 255, 0)),
+            layout: Cell::new((false, 255, 0, false)),
+            presentation: RefCell::new(Presentation::default()),
+            expanding: Cell::new(false),
+            details_deadline: Cell::new(None),
             pill: Cell::new(RECT::default()),
             notice: Cell::new(RECT::default()),
             from: Cell::new(RECT::default()),
@@ -239,6 +272,7 @@ pub fn update(view: &View) {
     if let Some(bridge) = BRIDGE.get() {
         if let Ok(mut v) = bridge.view.lock() {
             *v = OverlayView {
+                generation: view.generation,
                 phase: view.phase.clone(),
                 message: view.message.clone(),
                 warning: view.warning.clone(),
@@ -318,6 +352,20 @@ fn dimensions(active: bool, side: bool) -> (f64, f64) {
         (false, true) => (16.0, 48.0),
         (true, true) => (40.0, 128.0),
     }
+}
+fn visible_dimensions(active: bool, side: bool, compact: bool) -> (f64, f64) {
+    if active && compact {
+        if side {
+            (28.0, 88.0)
+        } else {
+            (96.0, 28.0)
+        }
+    } else {
+        dimensions(active, side)
+    }
+}
+fn wave_origin(extent: f64) -> f64 {
+    (extent - 52.6) / 2.0
 }
 fn dock_bounds(work: RECT, dock: u8, width: i32, height: i32, scale: f64) -> RECT {
     let gap = (7.0 * scale) as i32;
@@ -406,11 +454,12 @@ unsafe fn geometry(hwnd: HWND, _p: &Painter, rect: RECT) {
 unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
     let active = view.phase != "idle" && !view.phase.is_empty();
+    let compact = active && p.presentation.borrow().compact;
     let dock = dock_id(&view.dock);
     if !active && dock == 3 {
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = KillTimer(Some(hwnd), 2);
-        p.layout.set((active, dock, notice_id(&view)));
+        p.layout.set((active, dock, notice_id(&view), compact));
         return;
     }
     let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
@@ -423,12 +472,16 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     }
     fonts(hwnd, p);
     let scale = p.dpi.get() as f64 / 96.0;
-    let (width, height) = dimensions(active, dock == 1 || dock == 2);
+    let (width, height) = visible_dimensions(active, dock == 1 || dock == 2, compact);
     let width = (width * scale) as i32;
     let height = (height * scale) as i32;
     let mut rect = dock_bounds(info.rcWork, dock, width, height, scale);
     let x = rect.left;
-    let notice = notice_text(&view);
+    let notice = if compact {
+        String::new()
+    } else {
+        notice_text(&view)
+    };
     let card_width = ((340.0 * scale) as i32).min(info.rcWork.right - info.rcWork.left - 20);
     let card_height = notice_height(hwnd, p, &notice, card_width);
     if card_height > 0 {
@@ -482,10 +535,12 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
         (width.min(height) as f64 / scale) / 2.0
     });
     // Mark the layout before SetWindowPos can synchronously reenter for DPI changes.
-    p.layout.set((active, dock, notice_id(&view)));
+    p.layout.set((active, dock, notice_id(&view), compact));
+    p.expanding
+        .set(rect.bottom - rect.top > from.bottom - from.top);
     p.duration.set(if card_height > 0 {
         0.22
-    } else if active {
+    } else if active && !compact {
         0.17
     } else {
         0.13
@@ -499,6 +554,33 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
         p.alpha.set(alpha);
         p.corner.set(p.corner_to.get());
         geometry(hwnd, p, rect);
+    }
+}
+unsafe fn advance_animation(hwnd: HWND, p: &Painter) {
+    if let Some(started) = p.transition.get() {
+        let t = (started.elapsed().as_secs_f64() / p.duration.get()).min(1.0);
+        let eased = eased_progress(t, p.expanding.get());
+        let mix = |a: i32, b: i32| (a as f64 + (b - a) as f64 * eased).round() as i32;
+        let a = p.from.get();
+        let b = p.to.get();
+        p.alpha
+            .set(mix(p.fade_from.get() as i32, p.fade_to.get() as i32) as u8);
+        p.corner
+            .set(p.corner_from.get() + (p.corner_to.get() - p.corner_from.get()) * eased);
+        geometry(
+            hwnd,
+            p,
+            RECT {
+                left: mix(a.left, b.left),
+                top: mix(a.top, b.top),
+                right: mix(a.right, b.right),
+                bottom: mix(a.bottom, b.bottom),
+            },
+        );
+        if t >= 1.0 {
+            p.transition.set(None);
+            let _ = KillTimer(Some(hwnd), 2);
+        }
     }
 }
 unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) {
@@ -597,6 +679,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     fonts(hwnd, p);
     let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
     let active = view.phase != "idle" && !view.phase.is_empty();
+    let compact = active && p.presentation.borrow().compact;
     let expanded = p.notice.get().bottom > 0;
     let side = matches!(dock_id(&view.dock), 1 | 2) && !expanded;
     let mut ps = PAINTSTRUCT::default();
@@ -736,15 +819,15 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             if side {
                 shape(
                     (w - amplitude) / 2.0,
-                    17.0 + i as f64 * 6.0,
+                    wave_origin(h) + i as f64 * 5.0,
                     amplitude,
-                    2.5,
+                    2.6,
                     color,
                 )
             } else {
                 shape(
-                    15.0 + i as f64 * 5.0,
-                    32.0 - amplitude / 2.0,
+                    wave_origin(w) + i as f64 * 5.0,
+                    (if compact { h / 2.0 } else { 32.0 }) - amplitude / 2.0,
                     2.6,
                     amplitude,
                     color,
@@ -756,12 +839,14 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         } else {
             (w - 17.0, 32.0)
         };
-        for i in -4..=4 {
-            let v = i as f64 * 0.65;
-            shape(cx + v - 0.6, cy + v - 0.6, 1.2, 1.2, ink);
-            shape(cx + v - 0.6, cy - v - 0.6, 1.2, 1.2, ink);
+        if !compact {
+            for i in -4..=4 {
+                let v = i as f64 * 0.65;
+                shape(cx + v - 0.6, cy + v - 0.6, 1.2, 1.2, ink);
+                shape(cx + v - 0.6, cy - v - 0.6, 1.2, 1.2, ink);
+            }
         }
-        if !side {
+        if !side && !compact {
             let status = match view.phase.as_str() {
                 "listening" if view.message == "Starting microphone" => "Getting ready",
                 "listening" => "Listening",
@@ -799,9 +884,9 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
                 dc,
                 &timer,
                 RECT {
-                    left: (95.0 * scale) as i32,
+                    left: (15.0 * scale) as i32,
                     top: top + (23.0 * scale) as i32,
-                    right: width - (29.0 * scale) as i32,
+                    right: (49.0 * scale) as i32,
                     bottom: height - (4.0 * scale) as i32,
                 },
                 p.small.get(),
@@ -905,6 +990,12 @@ unsafe extern "system" fn procedure(
         #[cfg(test)]
         QUERY_SURFACES => LRESULT(p.surface_builds.get() as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SETCURSOR if lparam.0 as u16 as u32 == HTCLIENT => {
+            if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
+                SetCursor(Some(cursor));
+            }
+            LRESULT(1)
+        }
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             paint(hwnd, &p);
@@ -922,13 +1013,34 @@ unsafe extern "system" fn procedure(
             let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
             let active = view.phase != "idle" && !view.phase.is_empty();
             let dock = dock_id(&view.dock);
-            if p.layout.get() != (active, dock, notice_id(&view)) {
+            if p.presentation.borrow_mut().sync(&view) {
+                p.details_deadline.set(Some(
+                    Instant::now() + Duration::from_millis(DETAILS_MS as u64),
+                ));
+                SetTimer(Some(hwnd), 3, DETAILS_MS, None);
+            } else if !active {
+                p.details_deadline.set(None);
+                let _ = KillTimer(Some(hwnd), 3);
+            }
+            // WM_TIMER is low priority. Apply deadlines during meter traffic too,
+            // so a busy message queue cannot indefinitely postpone contraction.
+            if p.details_deadline
+                .get()
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                p.details_deadline.set(None);
+                p.presentation.borrow_mut().compact = true;
+                let _ = KillTimer(Some(hwnd), 3);
+            }
+            let compact = p.presentation.borrow().compact;
+            if p.layout.get() != (active, dock, notice_id(&view), compact) {
                 // Snap across docks/monitors; unfold upward within the current dock.
                 let same_dock = p.layout.get().1 == dock;
                 let same_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
                     == MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
                 position(hwnd, &p, same_dock && same_monitor);
             }
+            advance_animation(hwnd, &p);
             if view.phase == "processing" && p.animated {
                 SetTimer(Some(hwnd), 1, 40, None);
             } else {
@@ -952,34 +1064,29 @@ unsafe extern "system" fn procedure(
             LRESULT(0)
         }
         WM_TIMER => {
-            if wparam.0 == 2 {
-                if let Some(started) = p.transition.get() {
-                    let t = (started.elapsed().as_secs_f64() / p.duration.get()).min(1.0);
-                    let eased = eased_progress(t, p.layout.get().0);
-                    let mix = |a: i32, b: i32| (a as f64 + (b - a) as f64 * eased).round() as i32;
-                    let a = p.from.get();
-                    let b = p.to.get();
-                    p.alpha
-                        .set(mix(p.fade_from.get() as i32, p.fade_to.get() as i32) as u8);
-                    p.corner.set(
-                        p.corner_from.get() + (p.corner_to.get() - p.corner_from.get()) * eased,
-                    );
-                    geometry(
-                        hwnd,
-                        &p,
-                        RECT {
-                            left: mix(a.left, b.left),
-                            top: mix(a.top, b.top),
-                            right: mix(a.right, b.right),
-                            bottom: mix(a.bottom, b.bottom),
-                        },
-                    );
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                    if t >= 1.0 {
-                        p.transition.set(None);
-                        let _ = KillTimer(Some(hwnd), 2);
+            if wparam.0 == 3 {
+                if let Some(deadline) = p.details_deadline.get() {
+                    if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                        // A timer message already queued for an older session
+                        // must not collapse freshly opened details.
+                        SetTimer(Some(hwnd), 3, remaining.as_millis().max(1) as u32, None);
+                        return LRESULT(0);
                     }
                 }
+                let _ = KillTimer(Some(hwnd), 3);
+                p.details_deadline.set(None);
+                let should_contract = {
+                    let presentation = p.presentation.borrow();
+                    presentation.active && !presentation.compact
+                };
+                if should_contract {
+                    p.presentation.borrow_mut().compact = true;
+                    position(hwnd, &p, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+            } else if wparam.0 == 2 {
+                advance_animation(hwnd, &p);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             } else {
                 p.tick.set(p.tick.get().wrapping_add(1));
                 let _ = InvalidateRect(Some(hwnd), None, false);
@@ -1000,14 +1107,16 @@ unsafe extern "system" fn procedure(
             let scale = p.dpi.get() as f64 / 96.0;
             let pill = p.pill.get();
             let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
+            let compact = p.presentation.borrow().compact;
             let cancel = in_pill
+                && !compact
                 && view.phase != "idle"
                 && if side {
                     y >= client.bottom - (30.0 * scale) as i32
                 } else {
                     x >= pill.right - (28.0 * scale) as i32
                 };
-            let action = if cancel {
+            let action = if cancel || (compact && view.phase == "processing") {
                 Action::Cancel
             } else if !in_pill || view.phase == "error" || view.phase == "preview" {
                 Action::Open
@@ -1037,6 +1146,40 @@ unsafe extern "system" fn procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn meter_updates_do_not_reopen_collapsed_details() {
+        let mut presentation = Presentation::default();
+        let mut view = OverlayView {
+            generation: 1,
+            phase: "listening".into(),
+            ..OverlayView::default()
+        };
+        assert!(presentation.sync(&view));
+        presentation.compact = true;
+        for n in 0..150 {
+            view.level = n as f32 / 150.0;
+            view.seconds = n as f32 * 0.02;
+            assert!(!presentation.sync(&view));
+            assert!(presentation.compact);
+        }
+        view.phase = "processing".into();
+        assert!(!presentation.sync(&view));
+        assert!(presentation.compact);
+        view.warning = "Please review this recording".into();
+        assert!(presentation.sync(&view));
+        assert!(!presentation.compact);
+        presentation.compact = true;
+        assert!(!presentation.sync(&view));
+        view.phase = "idle".into();
+        assert!(!presentation.sync(&view));
+        assert!(!presentation.compact);
+        view.phase = "listening".into();
+        view.generation += 1;
+        assert!(presentation.sync(&view));
+        for extent in [28.0, 88.0, 96.0, 128.0, 168.0, 340.0] {
+            assert!((wave_origin(extent) + 52.6 / 2.0 - extent / 2.0).abs() < 0.001);
+        }
+    }
     #[test]
     fn unfolding_keeps_the_lower_edge_anchored_at_every_dock_and_scale() {
         let work = RECT {
@@ -1133,7 +1276,7 @@ mod tests {
             message: "Synthetic voice activity".into(),
             ..View::default()
         });
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(2900));
         let bridge = BRIDGE.get().unwrap();
         let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
         let surfaces = unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 };
@@ -1172,6 +1315,23 @@ mod tests {
         start(tx).unwrap();
         let initial = BRIDGE.get().unwrap();
         let initial_hwnd = HWND(initial.hwnd.load(Ordering::Relaxed) as *mut _);
+        assert_ne!(
+            unsafe { GetClassLongPtrW(initial_hwnd, GCLP_HCURSOR) },
+            0,
+            "Overlay has no explicit cursor and can inherit the busy cursor"
+        );
+        assert_eq!(
+            unsafe {
+                SendMessageW(
+                    initial_hwnd,
+                    WM_SETCURSOR,
+                    None,
+                    Some(LPARAM(HTCLIENT as isize)),
+                )
+                .0
+            },
+            1
+        );
         // Exercise the empty initial status that can be painted before first use.
         unsafe {
             let _ = SendMessageW(initial_hwnd, WM_PAINT, None, None);
@@ -1221,11 +1381,19 @@ mod tests {
         let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
         assert_ne!(ex & WS_EX_NOACTIVATE.0, 0);
         assert_ne!(ex & WS_EX_TOOLWINDOW.0, 0);
-        std::thread::sleep(Duration::from_millis(250));
         let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64 / 96.0;
         let mut bounds = RECT::default();
-        unsafe {
-            GetWindowRect(hwnd, &mut bounds).unwrap();
+        let settled = Instant::now();
+        loop {
+            unsafe {
+                GetWindowRect(hwnd, &mut bounds).unwrap();
+            }
+            if bounds.right - bounds.left == (168.0 * scale) as i32
+                || settled.elapsed() >= Duration::from_secs(1)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(bounds.right - bounds.left, (168.0 * scale) as i32);
         assert_eq!(bounds.bottom - bounds.top, (48.0 * scale) as i32);
@@ -1307,5 +1475,67 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(200));
         assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
+    }
+
+    #[test]
+    #[ignore = "Shows the real native bar for three seconds; no microphone or network."]
+    fn native_overlay_collapses_without_stopping_recording() {
+        let before = unsafe { GetForegroundWindow() };
+        let (tx, _) = mpsc::channel();
+        start(tx).unwrap();
+        configure(&Settings::default());
+        update(&View {
+            generation: 1,
+            phase: "listening".into(),
+            message: "Listening".into(),
+            level: 0.6,
+            ..View::default()
+        });
+        let bridge = BRIDGE.get().unwrap();
+        let hwnd = HWND(bridge.hwnd.load(Ordering::Relaxed) as *mut _);
+        std::thread::sleep(Duration::from_millis(300));
+        unsafe {
+            SendMessageW(hwnd, WM_TIMER, Some(WPARAM(3)), None);
+        }
+        let mut initial = RECT::default();
+        unsafe {
+            SendMessageW(hwnd, UPDATE, None, None);
+            GetWindowRect(hwnd, &mut initial).unwrap()
+        };
+        for reading in 0..140 {
+            update(&View {
+                generation: 1,
+                phase: "listening".into(),
+                message: "Listening".into(),
+                level: 0.6,
+                seconds: reading as f32 * 0.02,
+                ..View::default()
+            });
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut compact = RECT::default();
+        unsafe {
+            SendMessageW(hwnd, UPDATE, None, None);
+            GetWindowRect(hwnd, &mut compact).unwrap()
+        };
+        let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64 / 96.0;
+        assert_eq!(compact.right - compact.left, (96.0 * scale) as i32);
+        assert_eq!(compact.bottom - compact.top, (28.0 * scale) as i32);
+        assert_eq!(initial.bottom, compact.bottom);
+        assert_eq!(bridge.view.lock().unwrap().phase, "listening");
+        for dock in ["left", "right"] {
+            configure(&Settings {
+                dock: dock.into(),
+                ..Settings::default()
+            });
+            unsafe {
+                SendMessageW(hwnd, UPDATE, None, None);
+                GetWindowRect(hwnd, &mut compact).unwrap();
+                SendMessageW(hwnd, WM_PAINT, None, None);
+            }
+            assert_eq!(compact.right - compact.left, (28.0 * scale) as i32);
+            assert_eq!(compact.bottom - compact.top, (88.0 * scale) as i32);
+        }
+        assert_eq!(unsafe { GetForegroundWindow() }, before);
     }
 }

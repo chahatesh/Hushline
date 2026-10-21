@@ -183,7 +183,7 @@ async fn process(
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
     let started = Instant::now();
-    if session.command && recording.gaps > 0 {
+    if session.command && recording.requires_review {
         return Err("Microphone audio was interrupted. Please repeat the edit command; nothing was changed.".into());
     }
     let key = if session.settings.provider == "groq" {
@@ -219,7 +219,7 @@ async fn process(
         session.target.unwrap_or_else(|| {
             Err("The original field could not be inspected in time. Transcript preserved.".into())
         }),
-        recording.gaps,
+        recording.requires_review,
     );
     let mut output = text::normalize(&spoken, &local_mode, &dictionary);
     let mut preview = false;
@@ -230,11 +230,11 @@ async fn process(
     } else {
         String::new()
     };
-    if recording.gaps > 0 {
+    if recording.requires_review {
         if !warning.is_empty() {
             warning.push(' ');
         }
-        warning.push_str("Microphone audio briefly dropped. Available speech was kept. Review this transcript before copying; automatic paste was skipped.");
+        warning.push_str("Your microphone missed some audio. Available speech was kept. Review this transcript before copying; automatic paste was skipped.");
     }
     let _encoding_ms = recording.encoding_ms;
     if session.command {
@@ -258,7 +258,7 @@ async fn process(
         .await?;
         original = Some(t.selected.clone());
         preview = true;
-    } else if let Some((expanded, confirm)) = if recording.gaps == 0 {
+    } else if let Some((expanded, confirm)) = if !recording.requires_review {
         text::expand(&output, &snippets)
     } else {
         None
@@ -276,7 +276,7 @@ async fn process(
         } else {
             None
         };
-        if recording.gaps == 0
+        if !recording.requires_review
             && text::should_polish(
                 &output,
                 &session.settings.polish_policy,
@@ -340,8 +340,8 @@ async fn process(
     })
 }
 
-fn review_capture_target<T>(target: Result<T, String>, gaps: u32) -> Result<T, String> {
-    if gaps > 0 {
+fn review_capture_target<T>(target: Result<T, String>, requires_review: bool) -> Result<T, String> {
+    if requires_review {
         Err("Automatic insertion was blocked because microphone audio was interrupted.".into())
     } else {
         target
@@ -355,15 +355,13 @@ mod capture_quality_tests {
     fn interrupted_audio_never_retains_an_automatic_insertion_target() {
         let authorized = Ok::<_, String>("authorized editable field");
         assert_eq!(
-            review_capture_target(authorized.clone(), 0).unwrap(),
+            review_capture_target(authorized.clone(), false).unwrap(),
             "authorized editable field"
         );
-        for gaps in [1, 2, 100] {
-            assert!(review_capture_target(authorized.clone(), gaps)
-                .unwrap_err()
-                .contains("blocked"));
-        }
-        assert!(review_capture_target::<()>(Err("Focus changed".into()), 0).is_err());
+        assert!(review_capture_target(authorized.clone(), true)
+            .unwrap_err()
+            .contains("blocked"));
+        assert!(review_capture_target::<()>(Err("Focus changed".into()), false).is_err());
     }
 }
 
@@ -463,7 +461,7 @@ fn finish_completed(
         schedule_hide(
             state.tx.clone(),
             id,
-            if !inserted || has_notice { 12000 } else { 1300 },
+            if !inserted || has_notice { 2500 } else { 1300 },
         );
     }
     pending
@@ -662,7 +660,7 @@ async fn actor(
                             "Enable selected-text access in Settings for Command Mode.".into();
                         v.generation = generation;
                     });
-                    schedule_hide(state.tx.clone(), generation, 7000);
+                    schedule_hide(state.tx.clone(), generation, 2500);
                     continue;
                 }
                 let availability = if settings.provider == "offline" {
@@ -676,7 +674,7 @@ async fn actor(
                         v.message = e;
                         v.generation = generation;
                     });
-                    schedule_hide(state.tx.clone(), generation, 7000);
+                    schedule_hide(state.tx.clone(), generation, 2500);
                     continue;
                 }
                 let double = settings.double_tap
@@ -730,7 +728,7 @@ async fn actor(
             Message::Audio(id, audio::Event::Warning) => {
                 if id == generation {
                     publish(&app, &state, |v| {
-                        v.warning="Audio briefly dropped. Keep speaking; the transcript will be saved for review instead of pasted automatically.".into()
+                        v.warning="Your microphone missed a substantial amount of audio. Keep speaking; review the transcript in Hush before pasting.".into()
                     });
                 }
             }
@@ -772,7 +770,7 @@ async fn actor(
                             .map(|_| "Microphone test complete. No audio was sent.".into())
                             .unwrap_or_else(|e| e);
                     });
-                    schedule_hide(state.tx.clone(), id, 5000);
+                    schedule_hide(state.tx.clone(), id, 2500);
                     continue;
                 }
                 match result {
@@ -782,7 +780,7 @@ async fn actor(
                             v.message = e;
                             v.level = 0.0;
                         });
-                        schedule_hide(state.tx.clone(), id, 7000);
+                        schedule_hide(state.tx.clone(), id, 2500);
                     }
                     Ok(recording) => {
                         publish(&app, &state, |v| {
@@ -815,7 +813,7 @@ async fn actor(
                             v.phase = if e == "Cancelled" { "idle" } else { "error" }.into();
                             v.message = e;
                         });
-                        schedule_hide(state.tx.clone(), id, 8000);
+                        schedule_hide(state.tx.clone(), id, 2500);
                     }
                     Ok(done) => {
                         if done.preview {
@@ -919,7 +917,7 @@ async fn actor(
                         v.warning = e;
                     }
                 });
-                schedule_hide(state.tx.clone(), id, 5000);
+                schedule_hide(state.tx.clone(), id, 2500);
             }
             Message::Hide(id) => {
                 if id == generation && session.is_none() && pending.is_none() {

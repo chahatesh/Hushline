@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 — unreleased
+
+- Correct the overly strict 0.3.1 audio policy: a brief discontinuity no longer disables paste, snippets or AI polish for the entire recording. Require review for measured loss of at least 250 ms in one gap or 500 ms in total. Missing audio is not reconstructed.
+- Set the native pill's arrow cursor explicitly, including client-area cursor messages, to avoid inherited busy cursors.
+- Collapse listening/processing details after 2.5 seconds into a centered, opaque waveform while recording continues. New recordings and new notices briefly expand again; meter updates do not reset the timer. Guard queued timer messages from older sessions.
+- Center the expanded waveform too, place the timer beside it, and dismiss completed/error states after at most 2.5 seconds. Recovery text remains in Home until the next recording.
+- Add packet-timing diagnostics without saved/uploaded audio, brief/substantial-loss policy regressions and actual native cursor/collapse checks.
+
 ## 0.3.1 — unreleased
 
 - Unfold the native pill upward from a fixed lower edge as one rounded surface. Status and recovery details stay inside it; bottom and side docking retain their anchors.

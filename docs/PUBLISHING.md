@@ -20,7 +20,7 @@ The release workflow blocks incomplete acceptance evidence. After acceptance pas
 
 ```powershell
 node scripts/verify-release.mjs
-git tag -a v0.3.1 -m "Hush 0.3.1"
+git tag -a v0.3.2 -m "Hush 0.3.2"
 git push origin main
-git push origin v0.3.1
+git push origin v0.3.2
 ```

@@ -27,7 +27,7 @@ pub struct Recording {
     pub duration_ms: u64,
     pub limit_reached: bool,
     pub encoding_ms: u64,
-    pub gaps: u32,
+    pub requires_review: bool,
 }
 pub struct Engine {
     tx: mpsc::Sender<Request>,
@@ -81,7 +81,7 @@ struct Active {
     started: Instant,
     last_packet: Instant,
     limit_reached: bool,
-    gaps: u32,
+    requires_review: bool,
 }
 impl Active {
     fn read(&mut self, stream: &mut wasapi::Stream) -> Result<(), String> {
@@ -93,8 +93,8 @@ impl Active {
                 power += value * value;
             }
         })?;
-        if stream.gaps > self.gaps {
-            self.gaps = stream.gaps;
+        if !self.requires_review && stream.requires_review() {
+            self.requires_review = true;
             let _ = self.request.events.send(Event::Warning);
         }
         let count = self.samples.len() - start;
@@ -211,7 +211,7 @@ fn begin(request: &Start, stream: &mut Option<wasapi::Stream>) -> Result<Active,
         started: Instant::now(),
         last_packet: Instant::now(),
         limit_reached: false,
-        gaps: 0,
+        requires_review: false,
     })
 }
 fn finish(
@@ -386,7 +386,7 @@ fn encode(active: &Active) -> Result<Recording, String> {
         duration_ms: active.samples.len() as u64 * 1000 / active.rate as u64,
         limit_reached: active.limit_reached || active.samples.len() >= active.max,
         encoding_ms: started.elapsed().as_millis() as u64,
-        gaps: active.gaps,
+        requires_review: active.requires_review,
     })
 }
 fn silence_expired(
@@ -620,7 +620,7 @@ mod tests {
             started: Instant::now(),
             last_packet: Instant::now(),
             limit_reached: false,
-            gaps: 0,
+            requires_review: false,
         };
         let result = encode(&active).unwrap();
         assert_eq!(result.duration_ms, 125000);

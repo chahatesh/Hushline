@@ -109,3 +109,10 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Faster voice feedback and reused rendering resources | Implemented | Active capture interval is 20 ms; native update messages are coalesced, dashboard metering is capped at 10 Hz, and no idle timer was added. A real 5-second synthetic 50 Hz native workload reused its surface without reallocations. Full hotkey-to-screen latency remains unmeasured. |
 | Complete distinct dictionary hints | Implemented | Executed regressions cover whole names, whitespace, duplicates, oversized replacements and later smaller terms within the 800-character budget. General speech word-error improvement is not measured. |
 | Audio-gap recovery and review guard | Partially Implemented | A real device gap was reproduced. A forced 300 ms reader overrun now preserves later frames and marks the recording. Engine regression blocks automatic insertion, and interrupted captures skip snippets/AI polishing. Real normal Stop and cancellation passed. Full interrupted speech/transcription/manual review acceptance remains open; missing audio is not recoverable. |
+
+## 0.3.2 corrections
+
+| Feature | Status | Evidence / limits |
+| --- | --- | --- |
+| Brief-hiccup dictation and substantial-loss review | Partially Implemented | Reproduced startup timing gap explains why the previous any-gap policy was too strict. The new policy permits brief hiccups and holds >=250 ms single / >=500 ms cumulative measured loss. Real-device and policy verification is recorded in QA; lost speech is not reconstructed and broad live target acceptance remains open. |
+| Cursor, timed collapse and centered waveform | Partially Implemented | Explicit cursor, a session/notice-aware 2.5-second presentation timer and centered compact rendering are implemented. Native execution evidence is recorded in QA; physical mixed-monitor acceptance remains open. |

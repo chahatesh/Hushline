@@ -39,9 +39,13 @@ pub struct Stream {
     seen_packet: bool,
     next_position: Option<u64>,
     pub gaps: u32,
+    lost_frames: u64,
+    largest_gap: u64,
     selection: String,
     device_id: String,
     enumerator: IMMDeviceEnumerator,
+    #[cfg(test)]
+    packets: Vec<(u32, u32, u64, u64, Option<u64>)>,
 }
 impl Stream {
     pub fn open(name: &str) -> Result<Self, String> {
@@ -120,9 +124,13 @@ impl Stream {
                 seen_packet: false,
                 next_position: None,
                 gaps: 0,
+                lost_frames: 0,
+                largest_gap: 0,
                 selection: name.to_string(),
                 device_id,
                 enumerator,
+                #[cfg(test)]
+                packets: Vec::new(),
             })
         }
     }
@@ -134,6 +142,10 @@ impl Stream {
         self.seen_packet = false;
         self.next_position = None;
         self.gaps = 0;
+        self.lost_frames = 0;
+        self.largest_gap = 0;
+        #[cfg(test)]
+        self.packets.clear();
         Ok(())
     }
     pub fn matches_selection(&self, name: &str) -> bool {
@@ -151,6 +163,9 @@ impl Stream {
         }
         .as_ref()
             == Some(&self.device_id)
+    }
+    pub fn requires_review(&self) -> bool {
+        substantial_loss(self.largest_gap, self.lost_frames, self.rate)
     }
     pub fn stop(&mut self) -> Result<(), String> {
         if self.running {
@@ -170,15 +185,19 @@ impl Stream {
             {
                 let (mut pointer, mut frames, mut flags) = (std::ptr::null_mut(), 0, 0);
                 let mut position = 0;
+                let mut qpc = 0;
                 self.capture
                     .GetBuffer(
                         &mut pointer,
                         &mut frames,
                         &mut flags,
                         Some(&mut position),
-                        None,
+                        if cfg!(test) { Some(&mut qpc) } else { None },
                     )
                     .map_err(|_| "Could not read microphone audio. Nothing was sent.")?;
+                #[cfg(test)]
+                self.packets
+                    .push((flags, frames, position, qpc, self.next_position));
                 // Preserve the remaining audio after a glitch, but mark the
                 // recording for mandatory review. Never present it as complete.
                 let gap = flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0;
@@ -192,6 +211,8 @@ impl Stream {
                 };
                 if self.seen_packet && (gap || missing > 0) {
                     self.gaps = self.gaps.saturating_add(1);
+                    self.lost_frames = self.lost_frames.saturating_add(missing);
+                    self.largest_gap = self.largest_gap.max(missing);
                     // Silence preserves the time boundary rather than joining
                     // words across missing audio. Large gaps remain bounded.
                     for _ in 0..missing.min(self.rate as u64 * 2) {
@@ -231,6 +252,14 @@ impl Stream {
         }
         Ok(())
     }
+}
+fn substantial_loss(largest_gap: u64, total_loss: u64, rate: u32) -> bool {
+    // Driver startup and timestamp corrections can produce a short discontinuity.
+    // Reserve the paste-blocking warning for >=250 ms at once or >=500 ms total.
+    // This is a usability threshold, not proof that a shorter gap lost no words.
+    rate > 0
+        && (largest_gap.saturating_mul(1000) >= rate as u64 * 250
+            || total_loss.saturating_mul(1000) >= rate as u64 * 500)
 }
 impl Drop for Stream {
     fn drop(&mut self) {
@@ -273,6 +302,47 @@ fn decode(bytes: &[u8], float: bool) -> f32 {
 mod tests {
     use super::*;
     #[test]
+    fn brief_startup_hiccups_do_not_block_dictation_but_substantial_loss_does() {
+        for rate in [16000, 44100, 48000, 96000] {
+            let frames = |ms: u64| rate as u64 * ms / 1000;
+            assert!(!substantial_loss(0, 0, rate));
+            assert!(!substantial_loss(frames(123), frames(123), rate));
+            assert!(!substantial_loss(frames(10), frames(100), rate));
+            assert!(substantial_loss(frames(250), frames(250), rate));
+            assert!(substantial_loss(frames(100), frames(500), rate));
+        }
+    }
+    #[test]
+    #[ignore = "Reads only packet timing/flags from the real default microphone; no audio file or upload."]
+    fn normal_capture_packet_timing() {
+        let _com = Apartment::enter().unwrap();
+        let mut stream = Stream::open("").unwrap();
+        for attempt in 0..3 {
+            stream.start().unwrap();
+            let started = std::time::Instant::now();
+            let mut samples = 0;
+            while started.elapsed() < std::time::Duration::from_secs(5) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                stream.read(|_| samples += 1).unwrap();
+            }
+            stream.stop().unwrap();
+            stream.read(|_| samples += 1).unwrap();
+            let anomalies: Vec<_> = stream
+                .packets
+                .iter()
+                .filter(|(f, _, p, _, e)| *f & 1 != 0 || e.is_some_and(|e| *p != e))
+                .collect();
+            println!("Attempt {attempt}: rate={}, packets={}, samples={samples}, gaps={}, requires_review={}, anomalies={}",stream.rate,stream.packets.len(),stream.gaps,stream.requires_review(),anomalies.len());
+            for (flags, frames, position, qpc, expected) in anomalies.iter().take(12) {
+                println!("flags={flags}, frames={frames}, position={position}, expected={expected:?}, delta={}, qpc={qpc}",expected.map(|e| *position as i128-e as i128).unwrap_or(0));
+            }
+            assert!(
+                !stream.requires_review(),
+                "Normal capture lost a substantial amount of audio"
+            );
+        }
+    }
+    #[test]
     #[ignore = "Pauses the owned real-microphone reader briefly to check scheduling headroom; no upload or audio file."]
     fn endpoint_reports_a_scheduler_overrun_instead_of_silent_loss() {
         let _com = Apartment::enter().unwrap();
@@ -290,12 +360,44 @@ mod tests {
             stream.read(|_| frames += 1).unwrap();
         }
         assert!(frames > 0);
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        let warm = std::time::Instant::now();
+        while warm.elapsed() < std::time::Duration::from_millis(400) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            stream.read(|_| {}).unwrap();
+        }
+        stream.gaps = 0;
+        stream.lost_frames = 0;
+        stream.largest_gap = 0;
+        stream.packets.clear();
+        std::thread::sleep(std::time::Duration::from_millis(700));
         let mut retained = 0;
-        let result = stream.read(|_| retained += 1);
+        let mut result = Ok(());
+        for _ in 0..10 {
+            result = stream.read(|_| retained += 1);
+            if result.is_err() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         stream.stop().unwrap();
+        println!(
+            "Overrun: gaps={}, lost_frames={}, largest_gap={}, retained={retained}",
+            stream.gaps, stream.lost_frames, stream.largest_gap
+        );
+        for (flags, frames, position, qpc, expected) in stream
+            .packets
+            .iter()
+            .filter(|(f, _, p, _, e)| *f & 1 != 0 || e.is_some_and(|e| *p != e))
+            .take(8)
+        {
+            println!("flags={flags}, frames={frames}, position={position}, expected={expected:?}, qpc={qpc}");
+        }
         assert!(result.is_ok(), "An audio glitch ended capture: {result:?}");
         assert!(stream.gaps > 0, "Forced overrun was not marked for review");
+        assert!(
+            stream.requires_review(),
+            "Substantial loss was not held for review"
+        );
         assert!(
             retained >= stream.rate as usize / 4,
             "Remaining audio/time boundary was lost"
