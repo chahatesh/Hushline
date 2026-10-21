@@ -1,0 +1,17 @@
+[
+  {
+    "file": "hushline.exe",
+    "bytes": 7947264,
+    "sha256": "4520a8f244dc383b815146672cbe134bd305ca580f565769ec8893a5f29f7dbf"
+  },
+  {
+    "file": "Hush_0.4.0_x64-setup.exe",
+    "bytes": 2871792,
+    "sha256": "84608ca3b26c8aebdbd347eb458e81d81971b69d9e59492739dc9e0f3d4b6843"
+  },
+  {
+    "file": "Hush_0.4.0_x64_portable.zip",
+    "bytes": 3625837,
+    "sha256": "2d4d4b570f8430df686c5c9d3ec937ee54fab2a82449cd4df7e20c102c3b4e69"
+  }
+]
