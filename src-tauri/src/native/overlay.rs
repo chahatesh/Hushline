@@ -609,7 +609,14 @@ unsafe fn advance_animation(hwnd: HWND, p: &Painter) {
         }
     }
 }
-unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) {
+fn timer_alignment(side: bool) -> DRAW_TEXT_FORMAT {
+    if side {
+        DT_CENTER
+    } else {
+        DT_LEFT
+    }
+}
+unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF, side: bool) {
     // An empty Vec has a dangling sentinel pointer. Some Windows text paths
     // inspect the buffer even for a zero character count; never pass it to GDI.
     if value.is_empty() {
@@ -624,7 +631,7 @@ unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF) 
         hdc,
         &mut text[..count],
         &mut rect,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
+        timer_alignment(side) | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
     let _ = SelectObject(hdc, previous);
 }
@@ -889,7 +896,7 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             bottom: top + (lower * scale) as i32,
         };
         let _ = SetBkMode(dc, TRANSPARENT);
-        text(dc, &timer, rect, p.small.get(), ink);
+        text(dc, &timer, rect, p.small.get(), ink, side);
     }
     if expanded && top > 0 {
         let padding = (14.0 * scale) as i32;
@@ -1150,6 +1157,8 @@ mod tests {
     use super::*;
     #[test]
     fn timer_precedes_centered_wave_and_cancel_at_every_size() {
+        assert_eq!(timer_alignment(true), DT_CENTER);
+        assert_eq!(timer_alignment(false), DT_LEFT);
         for (width, height) in [(168.0, 32.0), (168.0, 28.0), (340.0, 32.0)] {
             let (left, top, right, bottom) = timer_bounds(width, height, false);
             assert!(left > 0.0 && top >= 0.0 && bottom <= height);

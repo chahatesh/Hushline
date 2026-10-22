@@ -1,5 +1,11 @@
 # Quality and release verification
 
+## 0.4.1 paste and side-timer correction
+
+The side timer shared a left-aligned drawing helper with the bottom layout. It now uses centered text inside the side timer bounds. Paste invalidation also counted accessibility focus events from unrelated background windows; those are now filtered by the foreground root. Clipboard sequence is captured after publication closes, with an additional owner check before paste/restoration. Protected-field, original field/caret identity, user-input, cancellation and terminal safeguards remain in place.
+
+Focused checks passed: 21 native unit tests (6 interactive tests explicitly ignored), all-target Clippy with warnings denied, frontend compilation/build and 10 frontend tests. Full-suite, packaged and hosted results will be recorded after execution. These unit checks do not establish successful insertion in every application.
+
 ## 0.4.0 current verification
 
 The implementation adds a configurable 300 ms preparation pause, first-sample recording cue, dark preparation/processing stages, timer at the left/top, and a brief hands-free notice. Recording retains its pending target inspection when capture finishes. Opening Hush and copying text stop delivery without cancelling transcription. A modifier-only shortcut prefix now settles before it can restart busy work or stop hands-free recording; more-specific Open/Copy/Paste/Improve prompt chords can complete safely. Startup, delivery, and prompt editing have bounded deadlines. Timed-out native workers retain bounded capacity until they actually exit, and cancellation is checked immediately before dispatch.

@@ -251,14 +251,22 @@ fn prepare_paste(
             return Err(e);
         }
     }
-    let sequence = unsafe { GetClipboardSequenceNumber() };
     drop(lock);
+    // CloseClipboard completes publication and can synthesize additional formats.
+    // Track the published clipboard, then verify ownership too so a newer user
+    // copy cannot be mistaken for our transcript during this handoff.
+    let sequence = unsafe { GetClipboardSequenceNumber() };
     // Only fast checks remain once the clipboard is prepared. Recheck the epoch
     // even for an explicitly approved preview: input after inspection revokes
     // that approval for this field. Never paste a newer user copy by accident.
     let valid = input_epoch() == current.epoch
         && unsafe { GetForegroundWindow() }.0 as isize == current.hwnd
-        && unsafe { GetClipboardSequenceNumber() } == sequence;
+        && publication_matches(
+            owner.0,
+            unsafe { GetClipboardOwner() }.unwrap_or_default(),
+            sequence,
+            unsafe { GetClipboardSequenceNumber() },
+        );
     let mut delivered = false;
     if valid && !cancel.is_cancelled() {
         let event = |vk, up| INPUT {
@@ -300,11 +308,20 @@ fn restore_later(pending: PendingRestore) -> String {
     } = pending;
     std::thread::sleep(Duration::from_millis(600));
     let mut warning = String::new();
-    if unsafe { GetClipboardSequenceNumber() } == sequence {
+    if publication_matches(
+        owner.0,
+        unsafe { GetClipboardOwner() }.unwrap_or_default(),
+        sequence,
+        unsafe { GetClipboardSequenceNumber() },
+    ) {
         match open(owner.0) {
             Ok(_lock) => {
-                if unsafe { GetClipboardSequenceNumber() } == sequence
-                    && unsafe { restore(&saved) }.is_err()
+                if publication_matches(
+                    owner.0,
+                    unsafe { GetClipboardOwner() }.unwrap_or_default(),
+                    sequence,
+                    unsafe { GetClipboardSequenceNumber() },
+                ) && unsafe { restore(&saved) }.is_err()
                 {
                     warning=" Clipboard restoration failed; the transcript may still be on the clipboard.".into();
                 }
@@ -317,13 +334,20 @@ fn restore_later(pending: PendingRestore) -> String {
     }
     warning
 }
+fn publication_matches(
+    owner: HWND,
+    current_owner: HWND,
+    sequence: u32,
+    current_sequence: u32,
+) -> bool {
+    !owner.0.is_null() && owner == current_owner && sequence == current_sequence
+}
 
 #[cfg(test)]
 mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
-
     #[test]
     fn clipboard_worker_capacity_is_bounded_until_actual_worker_release() {
         let active = AtomicUsize::new(0);
@@ -337,6 +361,20 @@ mod integration_tests {
         drop(second);
         drop(replacement);
         assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+    #[test]
+    fn clipboard_handoff_rejects_newer_copies_and_changed_owners() {
+        let ours = HWND(123usize as *mut _);
+        let other = HWND(456usize as *mut _);
+        assert!(publication_matches(ours, ours, 10, 10));
+        assert!(!publication_matches(ours, other, 10, 10));
+        assert!(!publication_matches(ours, ours, 10, 11));
+        assert!(!publication_matches(
+            HWND::default(),
+            HWND::default(),
+            10,
+            10
+        ));
     }
 
     struct Harness {

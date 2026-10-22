@@ -285,19 +285,48 @@ unsafe extern "system" fn mouse(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
 }
 unsafe extern "system" fn focus_event(
     _: HWINEVENTHOOK,
-    _: u32,
-    _: HWND,
+    event: u32,
+    window: HWND,
     _: i32,
     _: i32,
     _: u32,
     _: u32,
 ) {
-    EPOCH.fetch_add(1, Ordering::SeqCst);
+    let root = if window.0.is_null() {
+        window
+    } else {
+        GetAncestor(window, GA_ROOT)
+    };
+    if invalidates_focus(event, root, GetForegroundWindow()) {
+        EPOCH.fetch_add(1, Ordering::SeqCst);
+    }
+}
+fn invalidates_focus(event: u32, root: HWND, foreground: HWND) -> bool {
+    event == EVENT_SYSTEM_FOREGROUND
+        || (event == EVENT_OBJECT_FOCUS
+            && (root.0.is_null() || foreground.0.is_null() || root == foreground))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn background_focus_notifications_do_not_revoke_the_active_field() {
+        let active = HWND(123usize as *mut _);
+        let background = HWND(456usize as *mut _);
+        assert!(!invalidates_focus(EVENT_OBJECT_FOCUS, background, active));
+        assert!(invalidates_focus(EVENT_OBJECT_FOCUS, active, active));
+        assert!(invalidates_focus(
+            EVENT_OBJECT_FOCUS,
+            HWND::default(),
+            active
+        ));
+        assert!(invalidates_focus(
+            EVENT_SYSTEM_FOREGROUND,
+            background,
+            active
+        ));
+    }
     fn keys() -> Keys {
         Keys {
             down: [false; 256],

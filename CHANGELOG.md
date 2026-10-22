@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 — unreleased
+
+- Center the timer in both expanded and compact side docks; keep the bottom timer left-aligned.
+- Ignore accessibility focus events from background windows when deciding whether the original field changed. Foreground changes and actual input still invalidate automatic insertion.
+- Validate clipboard publication after closing it, and check both clipboard owner and sequence before paste/restoration so a newer user copy remains protected.
+- Record the user's requirement to work without subagents in project instructions.
+
 ## 0.4.0 — unreleased
 
 - Move the voice-bar timer to the left and × to the right, including compact mode; side docks put time above the centered waveform. Keep preparation and processing dark, with distinct stage labels; only microphone samples drive the bright recording waveform.
