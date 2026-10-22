@@ -64,6 +64,9 @@ struct Session {
     id: u64,
     capture: Option<audio::Capture>,
     held: bool,
+    pressed_at: Instant,
+    double_candidate: bool,
+    stop_on_release: bool,
     arm_elapsed: bool,
     settings: Settings,
     target: Option<oneshot::Receiver<Result<Target, String>>>,
@@ -238,6 +241,7 @@ fn target_async(
     state: Arc<AppState>,
     selection: bool,
     epoch: u64,
+    id: u64,
 ) -> oneshot::Receiver<Result<Target, String>> {
     let (tx, rx) = oneshot::channel();
     let token = state.cancel.lock().unwrap().clone();
@@ -255,6 +259,9 @@ fn target_async(
             Ok(target)
         })
         .await;
+        state
+            .diagnostics
+            .record(id, "target_inspection", lifecycle::native_outcome(&result));
         let _ = tx.send(result);
     });
     rx
@@ -296,6 +303,7 @@ fn begin(
             state.clone(),
             command && settings.selection_permission,
             epoch,
+            id,
         ))
     };
     publish(app, state, |v| {
@@ -326,6 +334,9 @@ fn begin(
         id,
         capture: None,
         held: true,
+        pressed_at: Instant::now(),
+        double_candidate: false,
+        stop_on_release: false,
         arm_elapsed: false,
         settings,
         target,
@@ -600,6 +611,9 @@ mod capture_quality_tests {
             id: 1,
             capture: None,
             held: true,
+            pressed_at: Instant::now(),
+            double_candidate: false,
+            stop_on_release: false,
             arm_elapsed: false,
             settings: Settings::default(),
             target: Some(target),
@@ -1115,25 +1129,56 @@ async fn actor(
             Message::Action(Action::Release) => {
                 let abandon = if let Some(s) = session.as_mut() {
                     s.held = false;
-                    if s.hands_free {
-                        false
-                    } else {
-                        last_tap = Some(Instant::now());
-                        if !has_audio(s) {
-                            true
-                        } else {
-                            if s.settings.double_tap {
-                                let tx = state.tx.clone();
-                                let id = s.id;
-                                tauri::async_runtime::spawn(async move {
-                                    tokio::time::sleep(Duration::from_millis(350)).await;
-                                    let _ = tx.send(Message::ReleaseAfter(id));
-                                });
-                            } else {
-                                stop_capture(s);
-                                processing(&app, &state, "preparing_audio", "Preparing audio");
+                    let elapsed = s.pressed_at.elapsed();
+                    match lifecycle::release_intent(
+                        s.hands_free,
+                        s.stop_on_release,
+                        s.double_candidate,
+                        elapsed,
+                    ) {
+                        lifecycle::ReleaseIntent::KeepRecording => false,
+                        lifecycle::ReleaseIntent::StartHandsFree => {
+                            s.hands_free = true;
+                            s.double_candidate = false;
+                            last_tap = None;
+                            if let Some(c) = &s.capture {
+                                c.stop_on_silence(true);
                             }
+                            publish(&app, &state, |v| {
+                                v.message =
+                                    "Hands-free · press and release the shortcut to finish".into()
+                            });
                             false
+                        }
+                        lifecycle::ReleaseIntent::Stop => {
+                            last_tap = if lifecycle::is_short_tap(elapsed)
+                                && !s.hands_free
+                                && !s.command
+                            {
+                                Some(Instant::now())
+                            } else {
+                                None
+                            };
+                            if !has_audio(s) {
+                                true
+                            } else {
+                                if s.settings.double_tap
+                                    && lifecycle::is_short_tap(elapsed)
+                                    && !s.stop_on_release
+                                    && !s.command
+                                {
+                                    let tx = state.tx.clone();
+                                    let id = s.id;
+                                    tauri::async_runtime::spawn(async move {
+                                        tokio::time::sleep(Duration::from_millis(350)).await;
+                                        let _ = tx.send(Message::ReleaseAfter(id));
+                                    });
+                                } else {
+                                    stop_capture(s);
+                                    processing(&app, &state, "preparing_audio", "Preparing audio");
+                                }
+                                false
+                            }
                         }
                     }
                 } else {
@@ -1226,33 +1271,30 @@ async fn actor(
                 if let Some(s) = session.as_mut() {
                     match action {
                         Action::Push if s.hands_free => {
-                            stop_capture(s);
-                            processing(&app, &state, "preparing_audio", "Preparing audio");
+                            // A settled modifier prefix arms Stop; its release
+                            // finishes the recording. More-specific chords can
+                            // still replace it without losing microphone audio.
+                            s.held = true;
+                            s.stop_on_release = true;
                         }
                         Action::Push => {
                             s.held = true;
-                            if s.settings.double_tap
+                            s.pressed_at = Instant::now();
+                            s.double_candidate = s.settings.double_tap
                                 && last_tap
-                                    .is_some_and(|t| t.elapsed() < Duration::from_millis(350))
-                            {
-                                s.hands_free = true;
-                                last_tap = None;
-                                if let Some(c) = &s.capture {
-                                    c.stop_on_silence(true);
-                                }
-                                publish(&app, &state, |v| {
-                                    v.message =
-                                        "Hands-free · press the shortcut again to stop".into()
-                                });
-                            }
+                                    .is_some_and(|t| t.elapsed() < Duration::from_millis(350));
+                            last_tap = None;
                         }
                         Action::HandsFree if !s.hands_free => {
+                            s.double_candidate = false;
+                            last_tap = None;
                             s.hands_free = true;
                             if let Some(c) = &s.capture {
                                 c.stop_on_silence(true);
                             }
                             publish(&app, &state, |v| {
-                                v.message = "Hands-free · press the shortcut again to stop".into()
+                                v.message =
+                                    "Hands-free · press and release the shortcut to finish".into()
                             });
                         }
                         Action::HandsFree => {
@@ -1260,6 +1302,8 @@ async fn actor(
                             processing(&app, &state, "preparing_audio", "Preparing audio");
                         }
                         Action::Command => {
+                            s.double_candidate = false;
+                            last_tap = None;
                             if !s.settings.selection_permission {
                                 publish(&app, &state, |v| {
                                     v.warning =
@@ -1268,8 +1312,12 @@ async fn actor(
                                 });
                             } else {
                                 s.command = true;
-                                s.target =
-                                    Some(target_async(state.clone(), true, native::input_epoch()));
+                                s.target = Some(target_async(
+                                    state.clone(),
+                                    true,
+                                    native::input_epoch(),
+                                    s.id,
+                                ));
                                 publish(&app, &state, |v| v.message = "Speak your edit".into());
                             }
                         }
@@ -1313,10 +1361,15 @@ async fn actor(
                     &app,
                     &state,
                     generation,
-                    action == Action::HandsFree || double,
+                    action == Action::HandsFree,
                     command,
                     false,
                 ));
+                if let Some(s) = session.as_mut() {
+                    // Only the SECOND short release confirms a double-tap.
+                    // Holding that second activation must remain push-to-talk.
+                    s.double_candidate = double;
+                }
                 if settled_push {
                     if let Some(s) = session.as_mut() {
                         s.arm_elapsed = true;
@@ -1327,9 +1380,9 @@ async fn actor(
                         v.message = "Starting microphone".into();
                     });
                 }
-                if double || action == Action::HandsFree {
+                if action == Action::HandsFree {
                     publish(&app, &state, |v| {
-                        v.message = "Hands-free · press the shortcut again to stop".into()
+                        v.message = "Hands-free · press and release the shortcut to finish".into()
                     });
                 }
                 last_tap = None;
@@ -1464,7 +1517,7 @@ async fn actor(
                             } else if s.command {
                                 "Speak your edit"
                             } else if s.hands_free {
-                                "Hands-free · press the shortcut again to stop"
+                                "Hands-free · press and release the shortcut to finish"
                             } else {
                                 "Listening"
                             }
@@ -1600,6 +1653,11 @@ async fn actor(
                                     },
                                 )
                                 .await;
+                                st.diagnostics.record(
+                                    id,
+                                    "inserting",
+                                    lifecycle::native_outcome(&result),
+                                );
                                 let (inserted, message) = match result {
                                     Ok(message) => (true, message),
                                     Err(e) => (

@@ -430,7 +430,17 @@ mod integration_tests {
                 let _ = DestroyWindow(parent);
             });
             let (parent, edit, thread) = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            std::thread::sleep(Duration::from_millis(250));
+            let wait = std::env::var("HUSH_INTERACTIVE_TEST_WAIT_MS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(250)
+                .min(60_000);
+            let deadline = std::time::Instant::now() + Duration::from_millis(wait);
+            while unsafe { GetForegroundWindow() }.0 as isize != parent
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
             Self {
                 parent: HWND(parent as *mut _),
                 edit: HWND(edit as *mut _),
@@ -443,6 +453,13 @@ mod integration_tests {
                 let count = GetWindowTextW(self.edit, &mut buffer);
                 String::from_utf16_lossy(&buffer[..count as usize])
             }
+        }
+        fn wait_text(&self, expected: &str) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while self.text() != expected && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(self.text(), expected);
         }
     }
     impl Drop for Harness {
@@ -505,8 +522,7 @@ mod integration_tests {
             &CancellationToken::new(),
         )
         .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(h.text(), "Hello Hushline");
+        h.wait_text("Hello Hushline");
         let target = crate::native::capture_target(false).unwrap();
         let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
         crate::native::insert_with_notice(
@@ -524,7 +540,7 @@ mod integration_tests {
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .is_empty());
-        assert_eq!(h.text(), "Hello Hushline clipboard");
+        h.wait_text("Hello Hushline clipboard");
         {
             let _lock = open(guard.owner.0).unwrap();
             let saved = unsafe { snapshot().unwrap() };
@@ -614,5 +630,96 @@ mod integration_tests {
         let password = Harness::open(true);
         assert!(crate::native::capture_whole_field().is_err());
         assert!(password.text().is_empty());
+    }
+
+    #[test]
+    #[ignore = "Requires an interactive Windows desktop; verifies clipboard insertion with the real input/focus hooks running."]
+    fn native_clipboard_with_live_hooks() {
+        let h = Harness::open(false);
+        assert_eq!(
+            unsafe { GetForegroundWindow() },
+            h.parent,
+            "Owned test field must be foreground"
+        );
+        let (tx, _rx) = mpsc::channel();
+        crate::native::start_hooks(&crate::model::Shortcuts::default(), tx).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let target = capture_target(false).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            input_epoch(),
+            target.epoch,
+            "Passive focused field changed the input epoch"
+        );
+        let (tx, rx) = mpsc::channel();
+        crate::native::insert_with_notice(
+            &target,
+            "Clipboard with live hooks",
+            "clipboard",
+            false,
+            &CancellationToken::new(),
+            Some(Box::new(move |warning| {
+                let _ = tx.send(warning);
+            })),
+        )
+        .unwrap();
+        h.wait_text("Clipboard with live hooks");
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_empty());
+    }
+
+    #[test]
+    #[ignore = "Run through tests/native/paste-browser.mjs; accepts only its uniquely titled owned browser field."]
+    fn native_browser_clipboard() {
+        let title =
+            std::env::var("HUSH_BROWSER_TEST_TITLE").expect("Owned browser test title required");
+        assert!(title.starts_with("Hush owned paste test "));
+        // A normal foreground request for this test's exact, disposable window.
+        // If Windows refuses, the guard below fails without delivering any input.
+        let full: Vec<u16> = format!("{title} - Google Chrome")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        if let Ok(owned) = unsafe { FindWindowW(None, windows::core::PCWSTR(full.as_ptr())) } {
+            let _ = unsafe { SetForegroundWindow(owned) };
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let window = loop {
+            let hwnd = unsafe { GetForegroundWindow() };
+            let mut text = [0u16; 256];
+            let len = unsafe { GetWindowTextW(hwnd, &mut text) };
+            if String::from_utf16_lossy(&text[..len as usize]).starts_with(&title) {
+                break hwnd;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Owned browser must be foreground; nothing was inserted"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let (tx, _rx) = mpsc::channel();
+        crate::native::start_hooks(&crate::model::Shortcuts::default(), tx).unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        let started = std::time::Instant::now();
+        let target = capture_target(false).unwrap();
+        println!(
+            "Owned browser inspection: {} ms",
+            started.elapsed().as_millis()
+        );
+        assert_eq!(target.hwnd, window.0 as isize);
+        assert!(!target.terminal);
+        std::thread::sleep(Duration::from_millis(400));
+        let (tx, rx) = mpsc::channel();
+        crate::native::insert_with_notice(
+            &target,
+            "Hush clipboard: first sentence.\n\n• First item\n• Second item",
+            "clipboard",
+            false,
+            &CancellationToken::new(),
+            Some(Box::new(move |warning| {
+                let _ = tx.send(warning);
+            })),
+        )
+        .unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_empty());
     }
 }

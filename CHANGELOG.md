@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 — unreleased
+
+- Keep the original text field authorized when the nonactivating pill is clicked to stop. Ordinary clicks, scrolling, focus changes, protected fields, and cancellation still prevent unsafe delivery.
+- Count only short taps toward optional double-tap activation. A second activation held for dictation now ends on release; finishing hands-free by press-and-release requires no extra click. Normal holds no longer wait through the double-tap window.
+- Add bounded, content-free reason codes for target inspection and delivery failures to the existing in-memory diagnostics export.
+- Strengthen actual Windows insertion checks with asynchronous delivery waits, owned test-field guards, and an interactive browser test. Live microphone-to-Groq-to-target acceptance remains a release requirement.
+
 ## 0.4.1 — unreleased
 
 - Center the timer in both expanded and compact side docks; keep the bottom timer left-aligned.

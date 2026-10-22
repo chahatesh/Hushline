@@ -17,11 +17,25 @@ impl Diagnostics {
     pub fn record(&self, generation: u64, stage: &str, outcome: &str) {
         let stage = match stage {
             "arming" | "microphone" | "recording" | "preparing_audio" | "transcribing"
-            | "polishing" | "inserting" | "prompt_editing" => stage,
+            | "polishing" | "inserting" | "prompt_editing" | "target_inspection" => stage,
             _ => "idle",
         };
         let outcome = match outcome {
-            "starting" | "listening" | "processing" | "preview" | "success" | "error" => outcome,
+            "starting"
+            | "listening"
+            | "processing"
+            | "preview"
+            | "success"
+            | "error"
+            | "completed"
+            | "cancelled"
+            | "field_changed"
+            | "protected_input"
+            | "unsupported_field"
+            | "clipboard_busy"
+            | "clipboard_unsupported"
+            | "native_timeout"
+            | "native_error" => outcome,
             _ => "idle",
         };
         let mut trace = self.0.lock().unwrap();
@@ -57,6 +71,43 @@ impl Diagnostics {
         self.0.lock().unwrap().events.iter().cloned().collect()
     }
 }
+/// Strict, content-free reason codes. Never return any part of an error payload.
+pub fn native_outcome<T>(result: &Result<T, String>) -> &'static str {
+    let Err(error) = result else {
+        return "completed";
+    };
+    let error = error.to_ascii_lowercase();
+    if error == "cancelled" {
+        "cancelled"
+    } else if error.contains("took too long") || error.contains("timed out") {
+        "native_timeout"
+    } else if error.contains("password")
+        || error.contains("read-only")
+        || error.contains("protected")
+    {
+        "protected_input"
+    } else if error.contains("clipboard")
+        && (error.contains("unsupported")
+            || error.contains("cannot restore")
+            || error.contains("too large"))
+    {
+        "clipboard_unsupported"
+    } else if error.contains("clipboard") && error.contains("busy") {
+        "clipboard_busy"
+    } else if error.contains("changed")
+        || error.contains("owning window")
+        || error.contains("active window")
+    {
+        "field_changed"
+    } else if error.contains("editable")
+        || error.contains("field type")
+        || error.contains("focused field")
+    {
+        "unsupported_field"
+    } else {
+        "native_error"
+    }
+}
 pub fn aborts_processing(action: Action) -> bool {
     action == Action::Cancel
 }
@@ -73,6 +124,32 @@ pub fn blocks_delivery(action: Action) -> bool {
 }
 pub fn may_start(held: bool, hands_free: bool) -> bool {
     held || hands_free
+}
+/// A completed hold is never a tap, even if the next recording starts quickly.
+pub fn is_short_tap(elapsed: std::time::Duration) -> bool {
+    elapsed <= std::time::Duration::from_millis(250)
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReleaseIntent {
+    Stop,
+    KeepRecording,
+    StartHandsFree,
+}
+pub fn release_intent(
+    hands_free: bool,
+    stop_on_release: bool,
+    double_candidate: bool,
+    elapsed: std::time::Duration,
+) -> ReleaseIntent {
+    if stop_on_release {
+        ReleaseIntent::Stop
+    } else if hands_free {
+        ReleaseIntent::KeepRecording
+    } else if double_candidate && is_short_tap(elapsed) {
+        ReleaseIntent::StartHandsFree
+    } else {
+        ReleaseIntent::Stop
+    }
 }
 /// A modifier-only chord must not cancel inference before its final key arrives.
 #[derive(Default)]
@@ -104,6 +181,57 @@ impl PushGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_failure_diagnostics_include_only_fixed_reason_codes() {
+        assert_eq!(native_outcome(&Ok::<_, String>(())), "completed");
+        for (error, expected) in [
+            ("Cancelled", "cancelled"),
+            ("Focus or cursor changed", "field_changed"),
+            (
+                "Dictation is disabled in password fields",
+                "protected_input",
+            ),
+            ("Clipboard is busy", "clipboard_busy"),
+            (
+                "Clipboard uses an unsupported format",
+                "clipboard_unsupported",
+            ),
+            ("The field took too long to respond", "native_timeout"),
+            ("Focus an editable field", "unsupported_field"),
+            ("private text or secret-key", "native_error"),
+        ] {
+            assert_eq!(native_outcome::<()>(&Err(error.into())), expected);
+        }
+    }
+    #[test]
+    fn second_hold_release_finishes_instead_of_latching_hands_free() {
+        use std::time::Duration as D;
+        assert!(!is_short_tap(D::from_secs(2)));
+        assert_eq!(
+            release_intent(false, false, true, D::from_secs(2)),
+            ReleaseIntent::Stop
+        );
+        assert_eq!(
+            release_intent(true, true, false, D::from_millis(20)),
+            ReleaseIntent::Stop
+        );
+        assert_eq!(
+            release_intent(true, true, false, D::from_secs(2)),
+            ReleaseIntent::Stop
+        );
+        assert_eq!(
+            release_intent(true, false, false, D::from_millis(20)),
+            ReleaseIntent::KeepRecording
+        );
+        assert_eq!(
+            release_intent(false, false, true, D::from_millis(100)),
+            ReleaseIntent::StartHandsFree
+        );
+        assert_eq!(
+            release_intent(false, false, false, D::from_millis(100)),
+            ReleaseIntent::Stop
+        );
+    }
     #[test]
     fn opening_dashboard_and_copying_do_not_cancel_transcription() {
         for action in [

@@ -70,6 +70,15 @@ impl Presentation {
     }
 }
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
+/// Only this process's nonactivating overlay may preserve target authorization.
+/// Called from the mouse hook: one native hit test, no locks, UIA or IPC.
+pub fn contains_point(point: POINT) -> bool {
+    let Some(bridge) = BRIDGE.get() else {
+        return false;
+    };
+    let hwnd = HWND(bridge.hwnd.load(Ordering::Acquire) as *mut _);
+    !hwnd.0.is_null() && unsafe { WindowFromPoint(point) } == hwnd
+}
 struct Painter {
     view: Arc<Mutex<OverlayView>>,
     tx: mpsc::Sender<Action>,
@@ -1468,6 +1477,17 @@ mod tests {
         }
         assert_eq!(bounds.right - bounds.left, (168.0 * scale) as i32);
         assert_eq!(bounds.bottom - bounds.top, (32.0 * scale) as i32);
+        assert!(
+            contains_point(POINT {
+                x: (bounds.left + bounds.right) / 2,
+                y: (bounds.top + bounds.bottom) / 2
+            }),
+            "Native pill hit test must recognize the stop surface"
+        );
+        assert!(!contains_point(POINT {
+            x: bounds.left - 20,
+            y: bounds.top - 20
+        }));
         let surface_count = unsafe { SendMessageW(hwnd, QUERY_SURFACES, None, None).0 };
         for _ in 0..20 {
             unsafe {

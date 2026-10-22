@@ -1,5 +1,15 @@
 # Quality and release verification
 
+## 0.4.2 stop and paste reliability
+
+The global mouse hook counted the nonactivating overlay's stop click as a cursor edit, invalidating the original field before paste. Only left clicks whose native hit test resolves to this process's overlay are now exempted. Other clicks/scrolls, foreground and field validation, clipboard ownership, cancellation, protected fields, and terminal safeguards remain enforced.
+
+Gesture arbitration previously counted long holds toward double-tap activation and entered hands-free before the second release was known. Only taps of at most 250 ms qualify now; the second short release confirms hands-free. A held second activation stays push-to-talk and ends on release. Press/release while already hands-free finishes it, including the modifier-prefix delay used to distinguish other shortcuts.
+
+The actual owned Win32 field test passed Unicode insertion, clipboard insertion/restoration, cancelled insertion, wrong-target rejection, and password protection. Its fixed 100 ms assumption was replaced by a bounded wait for actual field contents. Subsequent interactive hook/browser checks could not acquire foreground ownership; their guards refused input. Those attempts do not establish browser or live speech acceptance. The new `tests/native/paste-browser.mjs` uses a fresh Chrome profile, local textarea/contenteditable fields, and a unique foreground-title guard; it sends no microphone audio or provider requests.
+
+New diagnostics distinguish target inspection and paste failures using fixed reason codes in the existing bounded in-memory export. No error payload, transcript, prompt, audio, field contents, or credential is recorded. Full live microphone → Groq → Notepad/browser acceptance remains pending; the public Release gate remains closed.
+
 ## 0.4.1 paste and side-timer correction
 
 The side timer shared a left-aligned drawing helper with the bottom layout. It now uses centered text inside the side timer bounds. Paste invalidation also counted accessibility focus events from unrelated background windows; those are now filtered by the foreground root. Clipboard sequence is captured after publication closes, with an additional owner check before paste/restoration. Protected-field, original field/caret identity, user-input, cancellation and terminal safeguards remain in place.

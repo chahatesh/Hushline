@@ -143,4 +143,11 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Clarify/Expand, editable preview, approved replacement | Partially Implemented | Action preference and shortcut persistence pass browser checks. Twenty-second AI deadline; output up to 100,000 UTF-8 bytes. Apply rechecks identity/full original text; changed targets keep a copyable proposal. Native/live replacement and provider quality remain pending. |
 | Transient prompt privacy and bounded stage metadata | Partially Implemented | Prompt source/output are excluded from automatic history, backup, and diagnostics. Stage metadata is memory-only, at most 200 events across 50 generations, with explicit export. Full live privacy acceptance remains open. |
 
-The source/build version is 0.4.0. Existing 0.3.x native captures, provider fixtures, and measurements remain evidence for their recorded builds only; consult QA and PERFORMANCE for newly executed 0.4.0 results. No new live feature is declared complete based only on browser presentation or a mocked provider.
+The source/build version is 0.4.2. Historical native captures, provider fixtures, and measurements remain evidence for their recorded builds only; consult QA and PERFORMANCE for executed checks. No new live feature is declared complete based only on browser presentation or a mocked provider.
+
+| 0.4.2 reliability update | Status | Evidence / limit |
+| --- | --- | --- |
+| Stop-click preserves original field authorization | Partially Implemented | Mouse-hook regression and native overlay hit-test checks cover the corrected path; uninterrupted live speech to a target still needs acceptance. Other clicks and scrolling retain revocation. |
+| Short-tap recognition and second hold/release stop | Partially Implemented | Release-intent regressions cover taps, long holds and hands-free finish. Real key/microphone-to-provider acceptance remains pending. |
+| Fixed inspection/paste failure reason codes | Implemented | Bounded in-memory diagnostics accept only fixed codes; arbitrary error payloads are excluded by regression tests. |
+| Windows control insertion and clipboard protection | Partially Implemented | Owned Win32 integration passed actual Unicode/paste delivery, clipboard restoration, cancellation, changed-target and password checks. Browser and broad application acceptance remain pending. |

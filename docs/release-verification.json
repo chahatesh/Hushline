@@ -1,11 +1,11 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.2",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-22T00:46:12.9772794Z",
-  "evidence": "0.4.1 corrects clipboard publication sequencing and background focus invalidation, and centers the native side timer. The actual Windows clipboard probe reproduced sequence changes on CloseClipboard and restored supported original formats. Unit and native overlay checks pass; see QA.md for packaged and hosted results. Uninterrupted live Groq-to-Notepad/browser and full cross-app paste/restoration acceptance remain unverified. Public Release remains gated.",
+  "testedAt": "2026-10-22T02:19:18.9803971Z",
+  "evidence": "0.4.2 fixes overlay stop-click target revocation and accidental hands-free latching after long holds, and adds content-free native failure codes. See QA.md for executed unit/native/packaged checks. Uninterrupted microphone-to-Groq-to-Notepad/browser acceptance remains pending; public Release remains gated.",
   "checks": {
-    "installLaunch": true,
+    "installLaunch": false,
     "saveKey": false,
     "selectMicrophone": false,
     "pushToTalkNotepad": false,

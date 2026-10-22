@@ -268,20 +268,21 @@ unsafe extern "system" fn mouse(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
                 if handle(key, w.0 == WM_XBUTTONDOWN as usize) {
                     return LRESULT(1);
                 }
-            } else if [
-                WM_LBUTTONDOWN,
-                WM_RBUTTONDOWN,
-                WM_MBUTTONDOWN,
-                WM_MOUSEWHEEL,
-                WM_MOUSEHWHEEL,
-            ]
-            .contains(&(w.0 as u32))
-            {
+            } else if invalidates_mouse(w.0 as u32, || super::overlay::contains_point(info.pt)) {
                 EPOCH.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
     CallNextHookEx(None, code, w, l)
+}
+fn invalidates_mouse(message: u32, overlay_hit: impl FnOnce() -> bool) -> bool {
+    match message {
+        // The overlay never activates a window or moves the original caret.
+        // Stop must not revoke the very target it is about to deliver to.
+        WM_LBUTTONDOWN => !overlay_hit(),
+        WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => true,
+        _ => false,
+    }
 }
 unsafe extern "system" fn focus_event(
     _: HWINEVENTHOOK,
@@ -310,6 +311,21 @@ fn invalidates_focus(event: u32, root: HWND, foreground: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clicking_the_nonactivating_pill_to_stop_does_not_revoke_paste() {
+        assert!(!invalidates_mouse(WM_LBUTTONDOWN, || true));
+        assert!(invalidates_mouse(WM_LBUTTONDOWN, || false));
+        for message in [
+            WM_RBUTTONDOWN,
+            WM_MBUTTONDOWN,
+            WM_MOUSEWHEEL,
+            WM_MOUSEHWHEEL,
+        ] {
+            assert!(invalidates_mouse(message, || true));
+            assert!(invalidates_mouse(message, || false));
+        }
+        assert!(!invalidates_mouse(WM_MOUSEMOVE, || false));
+    }
     #[test]
     fn background_focus_notifications_do_not_revoke_the_active_field() {
         let active = HWND(123usize as *mut _);
