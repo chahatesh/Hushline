@@ -1,0 +1,19 @@
+{
+  "version": "0.4.1",
+  "rustTestsPassed": 96,
+  "interactiveTestsIgnored": 16,
+  "frontendTestsPassed": 10,
+  "formattingTypeCheckBuildClippy": "passed",
+  "realNativeSideTimerAndNonactivation": "passed; centered text captured and inspected",
+  "realWindowsClipboardProbe": {
+    "sequenceBeforeClose": 5428,
+    "sequenceAfterClose": 5431,
+    "publishedOwnerVerified": true,
+    "restoredOriginalFormats": true,
+    "originalFormatCount": 8,
+    "privateContentsLogged": false
+  },
+  "clipboardBug": "The former pre-close sequence fence rejected the application's own publication on this Windows system.",
+  "liveSpeechIntoNotepadAndBrowser": "not re-certified; full acceptance remains pending",
+  "subagents": "none; no-delegation preference saved in AGENTS.md"
+}

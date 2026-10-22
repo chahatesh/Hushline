@@ -1,9 +1,9 @@
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-21T22:04:10.3582782Z",
-  "evidence": "0.4.0 implements staged recording, first-sample cue, preserved asynchronous target inspection, bounded delivery, independent writing styles and whole-field prompt previews. See docs/QA.md and docs/verification/*0.4.0.json for actual results. Native owned-control capture/replacement tests were attempted but Windows refused foreground acquisition before text dispatch. Live microphone -> Groq -> Notepad/browser, audible ready cue, changed-field replacement and physical mixed-monitor acceptance remain unverified. No public Release is authorized by this report.",
+  "testedAt": "2026-10-22T00:46:12.9772794Z",
+  "evidence": "0.4.1 corrects clipboard publication sequencing and background focus invalidation, and centers the native side timer. The actual Windows clipboard probe reproduced sequence changes on CloseClipboard and restored supported original formats. Unit and native overlay checks pass; see QA.md for packaged and hosted results. Uninterrupted live Groq-to-Notepad/browser and full cross-app paste/restoration acceptance remain unverified. Public Release remains gated.",
   "checks": {
     "installLaunch": true,
     "saveKey": false,
