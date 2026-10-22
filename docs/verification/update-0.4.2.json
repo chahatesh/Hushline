@@ -1,0 +1,25 @@
+{
+  "version": "0.4.2",
+  "sourceCommit": "05bbcf69e65ad1e4e333c2b690ae148faaec27b7",
+  "rustTestsPassed": 99,
+  "interactiveTestsIgnored": 18,
+  "frontendTestsPassed": 10,
+  "dashboardTestsPassed": 16,
+  "formattingTypeCheckBuildClippy": "passed",
+  "nativeOverlayHitTestAndNonactivation": "passed",
+  "ownedWin32ControlIntegration": "passed during investigation: Unicode, clipboard insertion/restoration, cancellation, changed target, password",
+  "liveHookAndBrowserForeground": "not established; guards refused input when Windows kept another window foreground",
+  "liveMicrophoneToGroqToNotepadAndBrowser": "not verified; public Release remains gated",
+  "noTranscriptOrAudioInDiagnostics": true,
+  "subagents": "none",
+  "realGroqPublicFixture": {
+    "model": "whisper-large-v3-turbo",
+    "elapsedMs": 1348,
+    "words": 22,
+    "fixtureSha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "coldHttpClient": true,
+    "privateAudioUploaded": false,
+    "keyModifiedOrLogged": false,
+    "includesMicrophoneOrInsertion": false
+  }
+}
