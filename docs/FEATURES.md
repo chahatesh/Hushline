@@ -146,7 +146,7 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Clarify/Expand, editable preview, approved replacement | Partially Implemented | Action preference and shortcut persistence pass browser checks. Twenty-second AI deadline; output up to 100,000 UTF-8 bytes. Apply rechecks identity/full original text; changed targets keep a copyable proposal. Native/live replacement and provider quality remain pending. |
 | Transient prompt privacy and bounded stage metadata | Partially Implemented | Prompt source/output are excluded from automatic history, backup, and diagnostics. Stage metadata is memory-only, at most 200 events across 50 generations, with explicit export. Full live privacy acceptance remains open. |
 
-The source/build version is 0.4.2. Historical native captures, provider fixtures, and measurements remain evidence for their recorded builds only; consult QA and PERFORMANCE for executed checks. No new live feature is declared complete based only on browser presentation or a mocked provider.
+The following section records the earlier 0.4.2 update. Historical native captures, provider fixtures, and measurements remain evidence for their recorded builds only; consult QA and PERFORMANCE for current executed checks. No new live feature is declared complete based only on browser presentation or a mocked provider.
 
 | 0.4.2 reliability update | Status | Evidence / limit |
 | --- | --- | --- |

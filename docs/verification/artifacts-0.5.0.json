@@ -1,0 +1,17 @@
+[
+  {
+    "file": "src-tauri/target/release/hushline.exe",
+    "bytes": 7966720,
+    "sha256": "81ea4a73ca16e7cb8f5d81e888edb13628415783a31ac825978f21bcd2fa4d92"
+  },
+  {
+    "file": "src-tauri/target/release/bundle/nsis/Hush_0.5.0_x64-setup.exe",
+    "bytes": 2878030,
+    "sha256": "5b0f15099dde8e6d4b417e579837589a278120ee4ceb0e2dae37fb11db42000b"
+  },
+  {
+    "file": "artifacts/Hush_0.5.0_x64_portable.zip",
+    "bytes": 3636664,
+    "sha256": "632389375870fe50e210d7c1660c9fe3c424f4927829d212fb3e25d1a8451e0f"
+  }
+]

@@ -12,5 +12,44 @@
   "nativeRecoveryScreenshots": "reviewed light/dark at 96 DPI; physical mixed-DPI monitors remain unverified",
   "liveMicrophoneToGroqToNotepadAndBrowser": "not verified; public Release gated",
   "noTranscriptOrAudioInDiagnostics": true,
-  "subagents": "none"
+  "subagents": "none",
+  "sourceCommit": "ffed61381b33dc6f957296a43f641ee452be9907",
+  "realOfflinePublicFixture": {
+    "passed": true,
+    "model": "tiny",
+    "elapsedMs": 3097,
+    "duringCompilation": true,
+    "fixtureSha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "includesMicrophoneOrInsertion": false
+  },
+  "realGroqSyntheticCleanup": {
+    "passed": true,
+    "model": "openai/gpt-oss-20b",
+    "sometimesMs": 997,
+    "alwaysMs": 429,
+    "neverMakesRequest": false,
+    "privateTextUploaded": false,
+    "keyModifiedOrLogged": false,
+    "includesSpeechOrInsertion": false
+  },
+  "realGroqPublicSpeech": {
+    "passed": true,
+    "model": "whisper-large-v3-turbo",
+    "elapsedMs": 970,
+    "words": 22,
+    "coldHttpClient": true,
+    "fixtureSha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "privateAudioUploaded": false,
+    "includesMicrophoneOrInsertion": false
+  },
+  "packagedDesktopIpc": "passed",
+  "installerAndPortable": "passed; actual per-user install/background launch/uninstall; upgrade/wizard unverified",
+  "releasePublic": false,
+  "hostedWindowsCi": {
+    "passed": true,
+    "runId": 40054814727,
+    "commit": "ffed61381b33dc6f957296a43f641ee452be9907",
+    "url": "https://github.com/chahatesh/Hushline/actions/runs/40054814727"
+  },
+  "reopenedExecutableVersion": "0.5.0"
 }

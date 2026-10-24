@@ -2,10 +2,10 @@
   "version": "0.5.0",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-24T02:33:40.8592438Z",
+  "testedAt": "2026-10-24T02:42:01.5057608Z",
   "evidence": "0.5.0 adds native Unicode Edit insertion, image-aware clipboard preservation, explicit recovery controls and numbered lists. Executed component/package checks are recorded in QA.md. Live microphone-to-Groq-to-Notepad/browser and whole-field prompt acceptance remain pending. No public Release.",
   "checks": {
-    "installLaunch": false,
+    "installLaunch": true,
     "saveKey": false,
     "selectMicrophone": false,
     "pushToTalkNotepad": false,

@@ -17,6 +17,10 @@ Native active voice bar (rendered on Windows):
 
 ![Hush native pill with centered waveform, timer and close control](docs/screenshots/native-pill.png)
 
+Native recovery card, with explicit paste and copy actions:
+
+![Hush native recovery card in dark mode](docs/screenshots/native-recovery-dark.png)
+
 ## What is here
 
 - Push-to-talk, hands-free recording, editable shortcuts, optional double-tap activation, Escape cancellation, tray lifecycle, and a nonactivating waveform overlay.
