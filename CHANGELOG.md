@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 — unreleased
+
+- Fix a reproduced browser paste failure when the focused text box grows or moves during dictation. Ordinary dictation now validates the same field, a collapsed selection and the real input generation rather than requiring identical screen coordinates.
+- Inspect selection endpoints without reading field contents. Newly selected text, changed fields, physical edits, protected inputs and cancellation still prevent insertion; preview replacements and native selection checks remain strict.
+- Extend real Windows/Chrome tests to cover stable fields, layout changes after target capture and programmatic focus changes, verifying complete multiline delivery exactly once and no insertion into another field.
+
 ## 0.5.1 — unreleased
 
 - Prioritize automatic delivery of ordinary dictation, including available speech after microphone interruptions. Keep interrupted Command Mode edits blocked, and retain changed-target/protected-input safeguards.

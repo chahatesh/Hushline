@@ -661,6 +661,7 @@ mod capture_quality_tests {
                 native_edit: None,
                 epoch: 7,
                 terminal: false,
+                selection_empty: None,
             }));
         });
         let target = resolve_target(job.target.take(), &CancellationToken::new())

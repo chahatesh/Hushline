@@ -5,7 +5,7 @@
 
 Hush is an independent, open-source Windows dictation application built with Rust, Tauri 2, and SolidJS. Hold a shortcut, say what you mean, and insert the result in the field where you were working. Choose Groq cloud recognition with your own API key, or download a local Whisper pack for offline dictation. Local automatic layout adds notes, bullets, and paragraphs without another AI call.
 
-**Version 0.5.1 is a pre-release, with live acceptance pending.** This update removes unnecessary paste blockers, silently keeps locally cleaned text when AI polishing fails, and extends recovery notifications to 12 seconds. The native pipeline and desktop interface have automated coverage; uninterrupted live speech → Groq → insertion still needs acceptance verification. The recording-ready sound and whole-field prompt editing need live Windows checks before they can be treated as complete. Earlier measurements are historical evidence, not 0.5.1 performance guarantees. See [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and the [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
+**Version 0.5.2 is a pre-release, with live acceptance pending.** This update fixes a reproduced paste failure when a focused browser text box grows or moves while you dictate. Ordinary dictation follows the same field through layout changes without requiring identical caret coordinates. New selections, real input and changed fields remain guarded. The native pipeline and desktop interface have automated coverage; uninterrupted live speech → Groq → insertion still needs acceptance verification. The recording-ready sound and whole-field prompt editing need live Windows checks before they can be treated as complete. Earlier measurements are historical evidence, not 0.5.2 performance guarantees. See [FEATURES](docs/FEATURES.md), [QA](docs/QA.md), and the [performance report](docs/PERFORMANCE.md). A public release is blocked until core acceptance checks pass.
 
 Hush was formerly named Hushline. The existing repository URL, application identifier, database name, credential slot, startup entry and executable name are retained for compatibility; saved keys and preferences stay in place.
 
@@ -40,8 +40,8 @@ These are implemented code paths, not a blanket compatibility claim. Terminal au
 
 Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. The installer uses a unique Windows registration and “Hush Dictation” shortcuts to avoid overwriting other apps named Hush. Earlier Hushline installations may be removed normally after testing Hush; keep app data when prompted. Locally built artifacts, when generated, are in:
 
-- `src-tauri/target/release/bundle/nsis/Hush_0.5.1_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
-- `artifacts/Hush_0.5.1_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
+- `src-tauri/target/release/bundle/nsis/Hush_0.5.2_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
+- `artifacts/Hush_0.5.2_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
 The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key, clear history, and delete saved audio in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 

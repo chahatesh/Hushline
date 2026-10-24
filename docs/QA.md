@@ -1,5 +1,13 @@
 # Quality and release verification
 
+## 0.5.2 field-reflow paste failure
+
+The old code compared caret rectangles captured before recording with their coordinates after transcription. A real owned Chrome textarea reproduced the failure: after capture, changing its margin and height caused insertion to fail with “The field changed before insertion” even though the same field remained focused and no user input occurred. The unit regression failed too. No private transcript or microphone audio is used by these fixtures.
+
+Ordinary dictation now tolerates screen-coordinate changes only when both inspections prove a collapsed selection, the field runtime identity matches and the physical-input generation is unchanged. Selection endpoint comparison reads no text. Changed/unknown selection state remains guarded; explicit preview replacements retain their stricter caret checks and native edit controls keep exact selection indices. The browser fixture now handshakes after capture, moves the actual field or focuses another owned field, and checks the complete output arrives once or remains untouched as appropriate.
+
+This addresses a confirmed delivery bug; it does not establish universal application compatibility or completed live microphone-to-Groq acceptance. Versioned reports below record checks actually executed.
+
 ## 0.5.1 automatic paste correction
 
 Two regression tests first reproduced the old behavior: an available dictation transcript lost its target after a substantial audio discontinuity, and a repeated accessibility focus notification revoked an unchanged field. Ordinary dictation now retains the verified destination and pastes available speech with a gap notice. Interrupted Command Mode still fails before transcription or editing. Accessibility focus notifications no longer advance the input generation; keyboard/mouse edits and foreground transitions still do, and delivery rechecks field identity, caret/selection, protection and cancellation.

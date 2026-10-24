@@ -31,6 +31,8 @@ pub struct Target {
     pub runtime: Vec<i32>,
     pub caret: Vec<i64>,
     pub selected: String,
+    /// Whether UIA proves that the selection is a caret, without reading text.
+    pub selection_empty: Option<bool>,
     pub app: String,
     pub epoch: u64,
     pub terminal: bool,

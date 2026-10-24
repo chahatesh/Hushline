@@ -1,0 +1,14 @@
+{
+  "version": "0.5.2",
+  "rootCause": "screen-coordinate comparison rejects the same editable field after layout reflow",
+  "beforeFixActualBrowserReflow": "reproduced: stable textarea passed; moving the same field caused delivery refusal",
+  "afterFixReflowAndSelectionRegression": "passed",
+  "rustTestsPassed": 114,
+  "defaultIgnoredTests": 21,
+  "frontendTestsPassed": 10,
+  "formatTypeBuildClippy": "passed",
+  "postFixActualBrowser": "not yet verified: Windows refused foreground acquisition; guard prevented input",
+  "selectionMetadata": "endpoint comparison only; no field contents read",
+  "liveMicrophoneToGroqToTarget": "unverified; public Release gated",
+  "subagents": "none"
+}

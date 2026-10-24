@@ -161,6 +161,7 @@ fn inspect_focused(
         )?;
         let mut selected = String::new();
         let mut caret = vec![];
+        let mut selection_empty = None;
         let mut editable = false;
         if let Ok(value) =
             element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
@@ -187,6 +188,14 @@ fn inspect_focused(
             if let Ok(ranges) = pattern.GetSelection() {
                 if ranges.Length().unwrap_or(0) == 1 {
                     if let Ok(range) = ranges.GetElement(0) {
+                        selection_empty = range
+                            .CompareEndpoints(
+                                TextPatternRangeEndpoint_Start,
+                                &range,
+                                TextPatternRangeEndpoint_End,
+                            )
+                            .ok()
+                            .map(|distance| distance == 0);
                         caret = range
                             .GetBoundingRectangles()
                             .map(array_f64)
@@ -248,6 +257,7 @@ fn inspect_focused(
                 runtime,
                 caret,
                 selected,
+                selection_empty,
                 app,
                 epoch,
                 terminal,
@@ -589,8 +599,13 @@ pub(super) fn target_matches(a: &Target, b: &Target, explicit: bool) -> bool {
         && a.runtime == b.runtime
         && if a.native_edit.is_some() {
             a.native_edit == b.native_edit
+        } else if !explicit && a.selected.is_empty() && a.selection_empty == Some(true) {
+            // A collapsed caret may move on screen when the same field grows,
+            // scrolls or reflows. Runtime identity and real-input epoch still
+            // fence delivery; a new text selection cannot be overwritten.
+            b.selection_empty == Some(true)
         } else {
-            a.caret == b.caret
+            a.selection_empty == b.selection_empty && a.caret == b.caret
         }
         && a.selected == b.selected
         && (explicit || a.epoch == b.epoch)
@@ -713,6 +728,35 @@ mod tests {
         assert!(read_key().is_err());
     }
     #[test]
+    fn ordinary_dictation_survives_field_reflow_without_user_input() {
+        let mut target = Target {
+            hwnd: 1,
+            runtime: vec![1, 2],
+            caret: vec![10, 20],
+            selected: String::new(),
+            app: "owned fixture".into(),
+            epoch: 7,
+            terminal: false,
+            selection_empty: None,
+            native_edit: None,
+        };
+        target.selection_empty = Some(true);
+        let mut current = target.clone();
+        current.caret = vec![10, 90]; // The field moved, without a user action.
+        assert!(target_matches(&target, &current, false));
+        assert!(!target_matches(&target, &current, true)); // Approved edits stay strict.
+        current.epoch += 1;
+        assert!(!target_matches(&target, &current, false));
+        current = target.clone();
+        current.runtime.push(3);
+        assert!(!target_matches(&target, &current, false));
+        current = target.clone();
+        current.selection_empty = Some(false);
+        assert!(!target_matches(&target, &current, false));
+        current.selection_empty = None;
+        assert!(!target_matches(&target, &current, false));
+    }
+    #[test]
     fn changed_focus_is_rejected() {
         let t = Target {
             hwnd: 1,
@@ -722,6 +766,7 @@ mod tests {
             app: "Notepad".into(),
             epoch: 2,
             terminal: false,
+            selection_empty: None,
             native_edit: None,
         };
         let mut b = t.clone();
@@ -750,6 +795,7 @@ mod tests {
             app: "owned native field".into(),
             epoch: 7,
             terminal: false,
+            selection_empty: None,
             native_edit: Some(super::super::NativeSelection {
                 hwnd: 2,
                 start: 3,
@@ -782,6 +828,7 @@ mod tests {
             app: "Notepad".into(),
             epoch: 4,
             terminal: false,
+            selection_empty: None,
             native_edit: None,
         };
         let snapshot = WholeFieldSnapshot {

@@ -175,6 +175,7 @@ fn native_atomic_edit_external_control() {
             app: "owned fixture".into(),
             epoch: input_epoch(),
             terminal: false,
+            selection_empty: None,
             native_edit: Some(selection.clone()),
         };
         let cancel = CancellationToken::new();

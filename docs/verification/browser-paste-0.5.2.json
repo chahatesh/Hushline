@@ -1,0 +1,6 @@
+{
+  "kind": "actual native clipboard insertion with live hooks; no speech provider",
+  "contenteditableWhiteSpace": "pre-wrap",
+  "checks": {},
+  "error": "Error: textarea/stable: native insertion failed"
+}

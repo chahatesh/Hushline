@@ -1026,9 +1026,27 @@ mod integration_tests {
         );
         assert_eq!(target.hwnd, window.0 as isize);
         assert!(!target.terminal);
+        if std::env::var("HUSH_BROWSER_MUTATE").as_deref() == Ok("1") {
+            use std::io::Write;
+            println!("HUSH_BROWSER_TARGET_READY");
+            std::io::stdout().flush().unwrap();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let _ = ready_tx.send(line);
+            });
+            assert_eq!(
+                ready_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .trim(),
+                "continue"
+            );
+        }
         std::thread::sleep(Duration::from_millis(400));
         let (tx, rx) = mpsc::channel();
-        crate::native::insert_with_notice(
+        let result = crate::native::insert_with_notice(
             &target,
             "Hush clipboard: first sentence.\n\n• First item\n• Second item",
             "clipboard",
@@ -1037,8 +1055,12 @@ mod integration_tests {
             Some(Box::new(move |warning| {
                 let _ = tx.send(warning);
             })),
-        )
-        .unwrap();
+        );
+        if std::env::var("HUSH_BROWSER_CHANGE_FIELD").as_deref() == Ok("1") {
+            assert!(result.is_err(), "Changed field must not receive text");
+            return;
+        }
+        result.unwrap();
         assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_empty());
     }
 }
