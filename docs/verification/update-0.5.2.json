@@ -7,8 +7,17 @@
   "defaultIgnoredTests": 21,
   "frontendTestsPassed": 10,
   "formatTypeBuildClippy": "passed",
-  "postFixActualBrowser": "not yet verified: Windows refused foreground acquisition; guard prevented input",
+  "postFixActualBrowser": "passed: all six real Chrome stable/reflow/changed-field cases across textarea and pre-wrap contenteditable; complete multiline text arrives exactly once; other fields remain unchanged",
   "selectionMetadata": "endpoint comparison only; no field contents read",
   "liveMicrophoneToGroqToTarget": "unverified; public Release gated",
-  "subagents": "none"
+  "subagents": "none",
+  "sourceCommit": "26790a47138e0afd5f9eb4c5298193828d9fde9d",
+  "packagedNativeIpc": "passed: startup, settings persistence, microphone cancel/normal silent Stop without upload, privacy and close/tray/reopen",
+  "installerAndPortable": "passed: per-user install/background launch/uninstall, profile and unrelated app preserved; wizard/upgrade unverified",
+  "hostedWindowsCi": {
+    "passed": true,
+    "runId": 40121215497,
+    "url": "https://github.com/chahatesh/Hushline/actions/runs/40121215497"
+  },
+  "publicRelease": false
 }

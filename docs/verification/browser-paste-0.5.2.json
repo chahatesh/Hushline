@@ -1,6 +1,13 @@
 {
   "kind": "actual native clipboard insertion with live hooks; no speech provider",
   "contenteditableWhiteSpace": "pre-wrap",
-  "checks": {},
-  "error": "Error: textarea/stable: native insertion failed"
+  "checks": {
+    "textarea_stable": true,
+    "textarea_reflow": true,
+    "textarea_changed_field": true,
+    "contenteditable_stable": true,
+    "contenteditable_reflow": true,
+    "contenteditable_changed_field": true
+  },
+  "error": null
 }

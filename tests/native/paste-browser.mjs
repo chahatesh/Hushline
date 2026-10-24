@@ -26,7 +26,7 @@ try {
       async function mutate(){
         if(mode==='changed_field')await other.evaluate(el=>el.focus());
         else {
-          const moved=await field.evaluate(el=>{const before=el.getBoundingClientRect().y;el.style.display='block';el.style.marginTop='80px';el.style.height='240px';return el.getBoundingClientRect().y!==before;});
+          const moved=await field.evaluate(el=>{const before=el.getBoundingClientRect().y;el.style.transform='translateY(80px)';el.style.height='240px';return el.getBoundingClientRect().y!==before;});
           assert(moved,'The reflow fixture must actually move the field');
         }
         child.stdin.end('continue\n');
