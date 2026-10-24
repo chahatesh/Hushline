@@ -116,7 +116,7 @@ try {
   report.checks.nativeMicrophoneNormalStopNoUpload=stopped.phase==='success'?'passed: WAV completed':'passed: silent recording rejected';
   await native(main,'action',{name:'cancel'});
   const backup=await native(main,'export_configuration');assert(!('apiKey' in backup)&&!('history' in backup)&&!('scratchpad' in backup)&&!('savedAudio' in backup));report.checks.nativeBackupExcludesSensitiveData=true;
-  report.checks.liveGroqToNotepad='not tested: no live provider request; native insertion harness could not acquire foreground';
+  report.checks.liveGroqToNotepad='not tested: this microphone smoke test performs no speech upload; see separate native insertion tests';
   const closed=main.waitForEvent('close',{timeout:10000});
   execFileSync('powershell.exe',['-NoProfile','-File','scripts/close-owned-dashboard.ps1','-ApplicationProcessId',String(child.pid),'-Executable',executable],{windowsHide:true});
   await closed;main=undefined;

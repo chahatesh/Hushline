@@ -1,0 +1,25 @@
+{
+  "configuration": "release executable, test-only CDP, actual native IPC",
+  "desktopBootObservedMs": 3398,
+  "checks": {
+    "nativeSnapshot": true,
+    "noSecretInSettings": true,
+    "nativePolishPolicyPersistence": true,
+    "nativeStyleAndStartupPreferences": true,
+    "nativePromptActionPreference": true,
+    "nativeTranscriptionDeadlinePersistence": true,
+    "recoveryMetadataOnly": true,
+    "nativeDictionaryPersisted": true,
+    "nativeCredentialUIRoundtrip": "skipped: existing key preserved",
+    "nativeAbandonedStartupAndRapidRetries": true,
+    "microphoneTestStage": "waiting for frames",
+    "nativeMicrophoneTestCancel": true,
+    "nativeStageMetadataOnly": true,
+    "nativeOrdinaryCaptureNoReviewWarning": true,
+    "nativeMicrophoneNormalStopNoUpload": "passed: silent recording rejected",
+    "nativeBackupExcludesSensitiveData": true,
+    "liveGroqToNotepad": "not tested: this microphone smoke test performs no speech upload; see separate native insertion tests",
+    "nativeDashboardCloseTrayAndReopen": true
+  },
+  "error": null
+}
