@@ -1,0 +1,22 @@
+{
+  "version": "0.5.1",
+  "rootCauseRegressionsReproducedBeforeFix": [
+    "audio interruptions revoked ordinary dictation target",
+    "repeated provider focus notification revoked unchanged field"
+  ],
+  "rustTestsPassed": 113,
+  "defaultIgnoredTests": 21,
+  "frontendTestsPassed": 10,
+  "dashboardTestsPassed": 16,
+  "formatTypeBuildClippy": "passed",
+  "nativeWindowsEditClipboardRestorationAndProtection": "passed: real owned Win32 controls",
+  "nativeLiveInputHooksPaste": "passed",
+  "nativeBrowserPaste": "passed: real Chrome textarea and pre-wrap contenteditable, complete public multiline fixture",
+  "nativeImageClipboardRoundtrip": "passed",
+  "nativeRecoveryCard": "passed: light/dark action hit tests, no focus activation, still expanded after old 2.5-second deadline",
+  "notificationMilliseconds": 12000,
+  "insertionDeadlineMilliseconds": 5000,
+  "automaticAiFallback": "local text, no error card; fixed local_fallback diagnostic only",
+  "liveMicrophoneToGroqToNotepadBrowser": "unverified; no public Release",
+  "subagents": "none"
+}

@@ -731,6 +731,14 @@ mod tests {
         assert!(target_matches(&t, &b, true));
         b.selected = "y".into();
         assert!(!target_matches(&t, &b, true));
+        // A provider focus notice is only a hint: the final inspection still
+        // rejects another field or a moved caret, even without physical input.
+        b = t.clone();
+        b.runtime.push(99);
+        assert!(!target_matches(&t, &b, false));
+        b = t.clone();
+        b.caret.push(99);
+        assert!(!target_matches(&t, &b, false));
     }
     #[test]
     fn native_selection_identity_ignores_only_visual_reflow() {

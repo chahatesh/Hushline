@@ -46,6 +46,13 @@ struct OverlayView {
     theme: String,
 }
 const DETAILS_MS: u32 = 2500;
+fn details_ms(view: &OverlayView) -> u32 {
+    if view.phase == "error" || view.recoverable || !view.warning.is_empty() {
+        crate::lifecycle::RECOVERY_NOTICE_MS as u32
+    } else {
+        DETAILS_MS
+    }
+}
 #[derive(Default)]
 struct Presentation {
     generation: u64,
@@ -1143,10 +1150,11 @@ unsafe extern "system" fn procedure(
             let active = view.phase != "idle" && !view.phase.is_empty();
             let dock = dock_id(&view.dock);
             if p.presentation.borrow_mut().sync(&view) {
+                let duration = details_ms(&view);
                 p.details_deadline.set(Some(
-                    Instant::now() + Duration::from_millis(DETAILS_MS as u64),
+                    Instant::now() + Duration::from_millis(duration as u64),
                 ));
-                SetTimer(Some(hwnd), 3, DETAILS_MS, None);
+                SetTimer(Some(hwnd), 3, duration, None);
             } else if !active {
                 p.details_deadline.set(None);
                 let _ = KillTimer(Some(hwnd), 3);
@@ -1275,6 +1283,22 @@ unsafe extern "system" fn procedure(
 mod tests {
     use super::*;
     #[test]
+    fn recovery_notices_stay_readable_without_extending_recording_details() {
+        let mut view = OverlayView {
+            phase: "listening".into(),
+            ..Default::default()
+        };
+        assert_eq!(details_ms(&view), 2500);
+        view.phase = "error".into();
+        assert!(details_ms(&view) >= 12_000);
+        view.phase = "success".into();
+        view.recoverable = true;
+        assert!(details_ms(&view) >= 12_000);
+        view.recoverable = false;
+        view.warning = "Microphone warning".into();
+        assert!(details_ms(&view) >= 12_000);
+    }
+    #[test]
     #[ignore = "Shows owned light/dark recovery cards and checks their native button messages; no microphone, paste, clipboard writes or network."]
     fn native_overlay_recovery_controls() {
         let before = unsafe { GetForegroundWindow() };
@@ -1333,6 +1357,13 @@ mod tests {
                 );
             }
         }
+        // Recovery must stay usable after the old 2.5-second collapse deadline.
+        std::thread::sleep(Duration::from_millis(3100));
+        let mut still_expanded = RECT::default();
+        unsafe {
+            GetClientRect(hwnd, &mut still_expanded).unwrap();
+        }
+        assert!(still_expanded.bottom > (64.0 * scale) as i32);
         update(&View {
             phase: "idle".into(),
             ..View::default()

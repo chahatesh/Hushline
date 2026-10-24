@@ -80,7 +80,7 @@ pub fn inspect(hwnd: HWND, foreground: HWND) -> Option<NativeSelection> {
         })
     }
 }
-fn windows_lines(text: &str) -> String {
+pub(super) fn windows_lines(text: &str) -> String {
     text.replace("\r\n", "\n")
         .replace('\r', "\n")
         .replace('\n', "\r\n")

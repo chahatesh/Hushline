@@ -1,6 +1,6 @@
 # Feature status
 
-Status describes 0.5.0, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
+Status describes 0.5.1, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
 
 | Requested feature | Status | Evidence / limit |
 | --- | --- | --- |

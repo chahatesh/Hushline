@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 — unreleased
+
+- Prioritize automatic delivery of ordinary dictation, including available speech after microphone interruptions. Keep interrupted Command Mode edits blocked, and retain changed-target/protected-input safeguards.
+- Stop treating provider-generated accessibility focus notices as user edits. Recheck the original field, actual keyboard/mouse activity and foreground changes before delivery.
+- Fall back silently to local text when automatic AI cleanup fails or changes protected facts; keep the fallback outcome in content-free diagnostics.
+- Normalize clipboard line endings to Windows CR-LF without doubling existing separators.
+- Allow more time for field inspection and clipboard availability without automatic repeat dispatch. Keep error/recovery/warning notices above the pill for 12 seconds, and dashboard notifications for 6/15 seconds. Recording details still compact after 2.5 seconds.
+
 ## 0.5.0 — unreleased
 
 - Insert into supported Unicode Windows edit controls in one undoable native operation, without typing or changing the clipboard. Recheck the field, selection, cancellation and input generation; uncertain delivery is never automatically repeated.

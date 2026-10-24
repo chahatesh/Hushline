@@ -150,7 +150,7 @@ impl Drop for Owner {
     }
 }
 fn open(hwnd: HWND) -> Result<Clipboard> {
-    for _ in 0..10 {
+    for _ in 0..50 {
         if unsafe { OpenClipboard(Some(hwnd)) }.is_ok() {
             return Ok(Clipboard);
         }
@@ -175,7 +175,8 @@ unsafe fn set_raw(format: u32, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn bytes(text: &str) -> Vec<u8> {
-    text.encode_utf16()
+    super::edit::windows_lines(text)
+        .encode_utf16()
         .chain(Some(0))
         .flat_map(u16::to_le_bytes)
         .collect()
@@ -312,7 +313,7 @@ pub fn paste_text(
             }
         })
         .map_err(|_| "Windows clipboard editing could not start. Your text is preserved.")?;
-    match rx.recv_timeout(Duration::from_millis(1800)) {
+    match rx.recv_timeout(Duration::from_millis(4500)) {
         Ok(result) => result,
         Err(_) => {
             token.cancel();
@@ -448,6 +449,20 @@ mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+    #[test]
+    fn clipboard_text_uses_windows_line_endings_without_doubling_them() {
+        let data = bytes("First\n\n• Second\r\nThird\rFourth");
+        let utf16: Vec<_> = data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        assert_eq!(
+            String::from_utf16(&utf16).unwrap(),
+            "First\r\n\r\n• Second\r\nThird\r\nFourth\0"
+        );
+    }
     #[test]
     fn snapshot_budget_is_bounded_even_for_overflowing_metadata() {
         assert!(fits_snapshot(32 * 1024 * 1024, 64 * 1024 * 1024));

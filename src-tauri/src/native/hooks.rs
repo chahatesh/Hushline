@@ -96,15 +96,6 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                     0,
                     WINEVENT_OUTOFCONTEXT,
                 );
-                let focus = SetWinEventHook(
-                    EVENT_OBJECT_FOCUS,
-                    EVENT_OBJECT_FOCUS,
-                    None,
-                    Some(focus_event),
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT,
-                );
                 let _ = ready_tx.send(Ok(()));
                 let mut msg = MSG::default();
                 while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -114,7 +105,6 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                 let _ = UnhookWindowsHookEx(k);
                 let _ = UnhookWindowsHookEx(m);
                 let _ = UnhookWinEvent(foreground);
-                let _ = UnhookWinEvent(focus);
             }
             (k, m) => {
                 if let Ok(k) = k {
@@ -287,25 +277,21 @@ fn invalidates_mouse(message: u32, overlay_hit: impl FnOnce() -> bool) -> bool {
 unsafe extern "system" fn focus_event(
     _: HWINEVENTHOOK,
     event: u32,
-    window: HWND,
+    _: HWND,
     _: i32,
     _: i32,
     _: u32,
     _: u32,
 ) {
-    let root = if window.0.is_null() {
-        window
-    } else {
-        GetAncestor(window, GA_ROOT)
-    };
-    if invalidates_focus(event, root, GetForegroundWindow()) {
+    if invalidates_focus(event) {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn invalidates_focus(event: u32, root: HWND, foreground: HWND) -> bool {
+fn invalidates_focus(event: u32) -> bool {
+    // Providers repeat EVENT_OBJECT_FOCUS during layout/activation even when
+    // the editable field has not changed. The delivery inspection compares the
+    // actual field/selection; physical input and foreground changes still fence it.
     event == EVENT_SYSTEM_FOREGROUND
-        || (event == EVENT_OBJECT_FOCUS
-            && (root.0.is_null() || foreground.0.is_null() || root == foreground))
 }
 
 #[cfg(test)]
@@ -327,21 +313,9 @@ mod tests {
         assert!(!invalidates_mouse(WM_MOUSEMOVE, || false));
     }
     #[test]
-    fn background_focus_notifications_do_not_revoke_the_active_field() {
-        let active = HWND(123usize as *mut _);
-        let background = HWND(456usize as *mut _);
-        assert!(!invalidates_focus(EVENT_OBJECT_FOCUS, background, active));
-        assert!(invalidates_focus(EVENT_OBJECT_FOCUS, active, active));
-        assert!(invalidates_focus(
-            EVENT_OBJECT_FOCUS,
-            HWND::default(),
-            active
-        ));
-        assert!(invalidates_focus(
-            EVENT_SYSTEM_FOREGROUND,
-            background,
-            active
-        ));
+    fn provider_focus_notifications_do_not_revoke_an_unchanged_field() {
+        assert!(!invalidates_focus(EVENT_OBJECT_FOCUS));
+        assert!(invalidates_focus(EVENT_SYSTEM_FOREGROUND));
     }
     fn keys() -> Keys {
         Keys {

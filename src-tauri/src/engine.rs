@@ -173,9 +173,9 @@ fn publish(app: &tauri::AppHandle, state: &AppState, change: impl FnOnce(&mut Vi
                 state,
                 view.generation,
                 if view.phase == "error" || view.recoverable || !view.warning.is_empty() {
-                    2500
+                    lifecycle::RECOVERY_NOTICE_MS
                 } else {
-                    1300
+                    2500
                 },
             );
         }
@@ -263,7 +263,7 @@ fn target_async(
     let (tx, rx) = oneshot::channel();
     let token = state.cancel.lock().unwrap().clone();
     tauri::async_runtime::spawn(async move {
-        let result = native_work(&state, Duration::from_millis(1200), &token, move |child| {
+        let result = native_work(&state, Duration::from_millis(2500), &token, move |child| {
             let target = native::capture_target(selection)?;
             if child.is_cancelled() {
                 return Err("Cancelled".into());
@@ -300,7 +300,7 @@ async fn resolve_target(
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err("Cancelled".into()),
-        result = tokio::time::timeout(Duration::from_millis(1250), target) => result.map_err(|_| "The original field inspection timed out. Your transcript is ready to copy.".to_string())?.map_err(|_| "The original field is unavailable. Your transcript is ready to copy.".to_string())?,
+        result = tokio::time::timeout(Duration::from_millis(2550), target) => result.map_err(|_| "The original field inspection timed out. Your transcript is ready to copy.".to_string())?.map_err(|_| "The original field is unavailable. Your transcript is ready to copy.".to_string())?,
     }
 }
 fn begin(
@@ -428,7 +428,7 @@ async fn process(
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
     let started = Instant::now();
-    if session.command && recording.requires_review {
+    if !capture_delivery_allowed(session.command, recording.requires_review) {
         return Err("Microphone audio was interrupted. Please repeat the edit command; nothing was changed.".into());
     }
     let key = if session.settings.provider == "groq" {
@@ -469,10 +469,7 @@ async fn process(
     if spoken.trim().is_empty() {
         return Err("No speech was returned. Nothing was inserted.".into());
     }
-    let target = review_capture_target(
-        resolve_target(session.target.take(), &cancel).await,
-        recording.requires_review,
-    );
+    let target = resolve_target(session.target.take(), &cancel).await;
     let cleaned = text::cleanup(
         &spoken,
         &local_mode,
@@ -492,7 +489,8 @@ async fn process(
         if !warning.is_empty() {
             warning.push(' ');
         }
-        warning.push_str("Your microphone missed some audio. Available speech was kept. Review this transcript before copying; automatic paste was skipped.");
+        warning
+            .push_str("Some microphone audio was missed. Check the available transcript for gaps.");
     }
     let _encoding_ms = recording.encoding_ms;
     if session.command {
@@ -548,7 +546,7 @@ async fn process(
                 text::polish_instruction(&session.settings.writing_style),
                 style.map(|s| s.instruction.as_str()).unwrap_or("")
             );
-            match rewrite(
+            let candidate = rewrite(
                 &state,
                 &session.settings,
                 &output,
@@ -556,28 +554,16 @@ async fn process(
                 false,
                 &cancel,
             )
-            .await
-            {
-                Ok(value) => match text::validate_cleanup(&output, &value) {
-                    Ok(()) => output = value,
-                    Err(reason) => {
-                        if !warning.is_empty() {
-                            warning.push(' ');
-                        }
-                        warning.push_str(&reason);
-                    }
-                },
-                Err(e) => {
-                    if cancel.is_cancelled() {
-                        return Err("Cancelled".into());
-                    }
-                    if !warning.is_empty() {
-                        warning.push(' ');
-                    }
-                    warning.push_str(&format!(
-                        "AI cleanup was unavailable; local cleanup was used. {e}"
-                    ));
-                }
+            .await;
+            if cancel.is_cancelled() {
+                return Err("Cancelled".into());
+            }
+            let (value, fallback) = polish_or_local(&output, candidate);
+            output = value;
+            if fallback {
+                state
+                    .diagnostics
+                    .record(session.id, "polishing", "local_fallback");
             }
         }
         output = text::finish_style(
@@ -603,11 +589,17 @@ async fn process(
     })
 }
 
-fn review_capture_target<T>(target: Result<T, String>, requires_review: bool) -> Result<T, String> {
-    if requires_review {
-        Err("Automatic insertion was blocked because microphone audio was interrupted.".into())
-    } else {
-        target
+fn capture_delivery_allowed(command: bool, requires_review: bool) -> bool {
+    // Ordinary dictation delivers the available speech. Interrupted commands
+    // are rejected before transcription, so partial instructions cannot edit text.
+    !command || !requires_review
+}
+fn polish_or_local(local: &str, candidate: Result<String, String>) -> (String, bool) {
+    match candidate {
+        Ok(value) if !value.trim().is_empty() && text::validate_cleanup(local, &value).is_ok() => {
+            (value, false)
+        }
+        _ => (local.to_owned(), true),
     }
 }
 
@@ -615,16 +607,26 @@ fn review_capture_target<T>(target: Result<T, String>, requires_review: bool) ->
 mod capture_quality_tests {
     use super::*;
     #[test]
-    fn interrupted_audio_never_retains_an_automatic_insertion_target() {
-        let authorized = Ok::<_, String>("authorized editable field");
+    fn ai_cleanup_failure_keeps_deliverable_local_text() {
+        let local = "Send 4 widgets to Maya at https://example.com/qa using useState.";
+        for candidate in [
+            Err("Provider unavailable".into()),
+            Ok(String::new()),
+            Ok("Send 5 widgets to Maya.".into()),
+        ] {
+            assert_eq!(polish_or_local(local, candidate), (local.to_owned(), true));
+        }
         assert_eq!(
-            review_capture_target(authorized.clone(), false).unwrap(),
-            "authorized editable field"
+            polish_or_local(local, Ok(local.into())),
+            (local.into(), false)
         );
-        assert!(review_capture_target(authorized.clone(), true)
-            .unwrap_err()
-            .contains("blocked"));
-        assert!(review_capture_target::<()>(Err("Focus changed".into()), false).is_err());
+    }
+    #[test]
+    fn interrupted_dictation_keeps_the_verified_paste_target() {
+        assert!(capture_delivery_allowed(false, false));
+        assert!(capture_delivery_allowed(false, true));
+        assert!(capture_delivery_allowed(true, false));
+        assert!(!capture_delivery_allowed(true, true));
     }
     fn test_session(target: oneshot::Receiver<Result<Target, String>>) -> Session {
         Session {
@@ -883,7 +885,15 @@ fn finish_completed(
         show(app, Some("Home"));
     } else {
         let has_notice = !state.view.lock().unwrap().warning.is_empty();
-        schedule_hide(state, id, if !inserted || has_notice { 2500 } else { 1300 });
+        schedule_hide(
+            state,
+            id,
+            if !inserted || has_notice {
+                lifecycle::RECOVERY_NOTICE_MS
+            } else {
+                2500
+            },
+        );
     }
     pending
 }
@@ -1125,7 +1135,7 @@ async fn actor(
                                 let notice = clipboard_notice(st.tx.clone());
                                 let result = native_work(
                                     &st,
-                                    Duration::from_secs(2),
+                                    Duration::from_secs(5),
                                     &token,
                                     move |child| {
                                         let target = native::capture_target(false)?;
@@ -1269,7 +1279,7 @@ async fn actor(
                         v.stage.clear();
                         v.message="The microphone did not start. Check the selected device and try again.".into();
                     });
-                    schedule_hide(&state, id, 2500);
+                    schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                 }
             }
             Message::Action(action @ (Action::Push | Action::HandsFree | Action::Command)) => {
@@ -1392,7 +1402,7 @@ async fn actor(
                         v.preview_id = None;
                         v.preview_kind.clear();
                     });
-                    schedule_hide(&state, generation, 2500);
+                    schedule_hide(&state, generation, lifecycle::RECOVERY_NOTICE_MS);
                     continue;
                 }
                 let double = settings.double_tap
@@ -1538,7 +1548,7 @@ async fn actor(
                             v.warning = e;
                         });
                         if pending.is_none() {
-                            schedule_hide(&state, id, 2500);
+                            schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                         }
                     }
                 }
@@ -1601,7 +1611,7 @@ async fn actor(
                             .map(|_| "Microphone test complete. No audio was sent.".into())
                             .unwrap_or_else(|e| e);
                     });
-                    schedule_hide(&state, id, 2500);
+                    schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                     continue;
                 }
                 match result {
@@ -1612,7 +1622,7 @@ async fn actor(
                             v.message = e;
                             v.level = 0.0;
                         });
-                        schedule_hide(&state, id, 2500);
+                        schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                     }
                     Ok(recording) => {
                         publish(&app, &state, |v| {
@@ -1644,7 +1654,7 @@ async fn actor(
                             v.stage.clear();
                             v.message = e;
                         });
-                        schedule_hide(&state, id, 2500);
+                        schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                     }
                     Ok(mut done) => {
                         if let Some(clip_id) = done.recovery_id.clone() {
@@ -1685,7 +1695,7 @@ async fn actor(
                                 let notice = clipboard_notice(st.tx.clone());
                                 let result = native_work(
                                     &st,
-                                    Duration::from_secs(2),
+                                    Duration::from_secs(5),
                                     &token,
                                     move |child| {
                                         native::insert_with_notice(
@@ -1751,7 +1761,7 @@ async fn actor(
                             }
                         }
                     });
-                    schedule_hide(&state, id, 2500);
+                    schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                 } else if let Err(error) = result {
                     let _ = state.tx.send(Message::ClipboardWarning(error));
                 }
@@ -1780,7 +1790,7 @@ async fn actor(
                             }
                         }
                     });
-                    schedule_hide(&state, id, 1800);
+                    schedule_hide(&state, id, 6000);
                 } else if let Err(error) = result {
                     let _ = state.tx.send(Message::ClipboardWarning(error));
                 }
@@ -1824,7 +1834,7 @@ async fn actor(
                 processing(&app, &state, "inserting", "Applying your edit");
                 tauri::async_runtime::spawn(async move {
                     let notice = clipboard_notice(st.tx.clone());
-                    let result = native_work(&st, Duration::from_secs(2), &token, move |child| {
+                    let result = native_work(&st, Duration::from_secs(5), &token, move |child| {
                         match p.target {
                             PreviewTarget::Selection(target) => native::insert_with_notice(
                                 &target, &p.text, &method, true, &child, notice,
@@ -1866,7 +1876,7 @@ async fn actor(
                 });
                 if succeeded {
                     pending = None;
-                    schedule_hide(&state, id, 2500);
+                    schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                 }
             }
             Message::Hide(id, ticket) => {

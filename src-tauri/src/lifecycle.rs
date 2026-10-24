@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Session metadata only. Neither transcript contents nor audio enter diagnostics.
 use crate::{model::StageDiagnostic, shortcuts::Action};
+pub const RECOVERY_NOTICE_MS: u64 = 12_000;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
@@ -48,6 +49,7 @@ impl Diagnostics {
             | "clipboard_busy"
             | "clipboard_unsupported"
             | "native_timeout"
+            | "local_fallback"
             | "native_error" => outcome,
             _ => "idle",
         };

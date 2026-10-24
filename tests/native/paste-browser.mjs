@@ -9,12 +9,13 @@ import assert from 'node:assert/strict';
 const tests = fs.readdirSync('src-tauri/target/debug/deps').filter(n => /^hushline_lib-.*\.exe$/.test(n)).map(n => path.resolve('src-tauri/target/debug/deps', n)).sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);
 assert(tests.length, 'Build Rust library tests first');
 const browser = await chromium.launch({channel:'chrome',headless:false,args:['--force-renderer-accessibility']});
-const report={kind:'actual native clipboard insertion; no speech provider',checks:{},error:null};
+const report={kind:'actual native clipboard insertion; no speech provider',contenteditableWhiteSpace:'pre-wrap',checks:{},error:null};
 try {
   const page=await browser.newPage();
   for(const kind of ['textarea','contenteditable']) {
     const title=`Hush owned paste test ${Date.now()} ${kind}`;
-    await page.setContent(`<title>${title}</title><label>Owned paste field ${kind}</label>${kind==='textarea'?'<textarea aria-label="Owned paste field" style="width:600px;height:300px"></textarea>':'<div role="textbox" aria-label="Owned paste field" contenteditable="true" style="width:600px;height:300px;border:1px solid"></div>'}`);
+    await page.setContent(`<title>${title}</title><label>Owned paste field ${kind}</label>${kind==='textarea'?'<textarea aria-label="Owned paste field" style="width:600px;height:300px"></textarea>':'<div role="textbox" aria-label="Owned paste field" contenteditable="true" style="width:600px;height:300px;border:1px solid;white-space:pre-wrap"></div>'}`);
+    // Match plain-text editor whitespace; rich HTML controls own their paragraph layout.
     const field=page.getByRole('textbox',{name:'Owned paste field',exact:true});
     await field.fill('Before: ');await field.click();await field.press('Control+End');await page.bringToFront();
     await new Promise((resolve,reject)=>{
