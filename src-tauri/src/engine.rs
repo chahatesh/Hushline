@@ -38,6 +38,7 @@ pub struct AppState {
     delivery_cancel: Mutex<CancellationToken>,
     native_slots: Arc<Semaphore>,
     diagnostics: Diagnostics,
+    visibility: lifecycle::VisibilityClock,
 }
 enum Message {
     Action(Action),
@@ -54,8 +55,10 @@ enum Message {
     Delivered(u64, Box<Completed>, bool, String),
     Applied(u64, Result<String, String>),
     Apply(Option<(String, String)>),
-    Hide(u64),
+    Hide(u64, u64),
     ClipboardWarning(String),
+    ManualDelivery(u64, u64, Result<String, String>),
+    Copied(u64, u64, Result<(), String>),
     Polishing(u64),
     Retry(String),
     RecoverySaved(u64, bool),
@@ -155,6 +158,7 @@ fn spawn_process(
 
 fn publish(app: &tauri::AppHandle, state: &AppState, change: impl FnOnce(&mut View)) {
     if let Ok(mut view) = state.view.lock() {
+        state.visibility.renew();
         change(&mut view);
         state
             .diagnostics
@@ -164,6 +168,17 @@ fn publish(app: &tauri::AppHandle, state: &AppState, change: impl FnOnce(&mut Vi
             let _ = app.emit_to("main", "dictation", view.clone());
         }
         native::update_overlay(&view);
+        if matches!(view.phase.as_str(), "success" | "error") {
+            schedule_hide(
+                state,
+                view.generation,
+                if view.phase == "error" || view.recoverable || !view.warning.is_empty() {
+                    2500
+                } else {
+                    1300
+                },
+            );
+        }
     }
 }
 fn show(app: &tauri::AppHandle, page: Option<&str>) {
@@ -194,10 +209,12 @@ fn clipboard_notice(tx: UnboundedSender<Message>) -> Option<Box<dyn FnOnce(Strin
         }
     }))
 }
-fn schedule_hide(tx: UnboundedSender<Message>, id: u64, millis: u64) {
+fn schedule_hide(state: &AppState, id: u64, millis: u64) {
+    let tx = state.tx.clone();
+    let ticket = state.visibility.renew();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(millis)).await;
-        let _ = tx.send(Message::Hide(id));
+        let _ = tx.send(Message::Hide(id, ticket));
     });
 }
 async fn native_work<T: Send + 'static>(
@@ -318,6 +335,7 @@ fn begin(
         v.preview_id = None;
         v.preview_kind.clear();
         v.warning.clear();
+        v.recoverable = false;
     });
     let tx = state.tx.clone();
     let pause = settings.startup_delay_ms;
@@ -385,12 +403,14 @@ fn cancel_capture(session: &Session) {
 }
 fn startup_abandoned(app: &tauri::AppHandle, state: &AppState, id: u64) {
     publish(app, state, |v| {
-        v.phase = "error".into();
+        v.phase = "idle".into();
         v.stage.clear();
         v.level = 0.0;
-        v.message = "Released before recording was ready. Hold until you hear the tone.".into();
+        v.seconds = 0.0;
+        v.message = "Recording cancelled before the microphone was ready".into();
+        v.warning.clear();
+        v.generation = id;
     });
-    schedule_hide(state.tx.clone(), id, 2500);
 }
 fn processing(app: &tauri::AppHandle, state: &AppState, stage: &str, message: &str) {
     publish(app, state, |v| {
@@ -636,6 +656,7 @@ mod capture_quality_tests {
                 caret: vec![1],
                 selected: String::new(),
                 app: "owned fixture".into(),
+                native_edit: None,
                 epoch: 7,
                 terminal: false,
             }));
@@ -829,6 +850,7 @@ fn finish_completed(
     }
     publish(app, state, |v| {
         v.last_text = done.text.clone();
+        v.recoverable = !inserted && !done.preview && !done.text.is_empty();
         v.phase = if done.preview {
             "preview"
         } else if inserted || done.recovery_id.is_some() {
@@ -861,11 +883,7 @@ fn finish_completed(
         show(app, Some("Home"));
     } else {
         let has_notice = !state.view.lock().unwrap().warning.is_empty();
-        schedule_hide(
-            state.tx.clone(),
-            id,
-            if !inserted || has_notice { 2500 } else { 1300 },
-        );
+        schedule_hide(state, id, if !inserted || has_notice { 2500 } else { 1300 });
     }
     pending
 }
@@ -961,6 +979,7 @@ async fn actor(
     let mut last_tap: Option<Instant> = None;
     let mut last_dashboard_meter: Option<Instant> = None;
     let mut deferred_push = lifecycle::PushGate::default();
+    let mut feedback = lifecycle::FeedbackGate::default();
     while let Some(mut message) = rx.recv().await {
         if matches!(
             message,
@@ -1067,11 +1086,20 @@ async fn actor(
                     Action::Copy => {
                         let text = state.view.lock().unwrap().last_text.clone();
                         let tx = state.tx.clone();
+                        let id = generation;
+                        let standalone = session.is_none()
+                            && !matches!(
+                                state.view.lock().unwrap().phase.as_str(),
+                                "starting" | "listening" | "processing" | "preview"
+                            );
+                        let operation = feedback.begin(id, standalone);
                         if !text.is_empty() {
                             tauri::async_runtime::spawn_blocking(move || {
-                                if let Err(e) = native::copy_text(&text) {
-                                    let _ = tx.send(Message::ClipboardWarning(e));
-                                }
+                                let _ = tx.send(Message::Copied(
+                                    id,
+                                    operation,
+                                    native::copy_text(&text),
+                                ));
                             });
                         }
                     }
@@ -1079,6 +1107,16 @@ async fn actor(
                         let text = state.view.lock().unwrap().last_text.clone();
                         let method = state.settings.read().unwrap().insertion.clone();
                         if !text.is_empty() {
+                            let standalone = session.is_none()
+                                && !matches!(
+                                    state.view.lock().unwrap().phase.as_str(),
+                                    "starting" | "listening" | "processing" | "preview"
+                                );
+                            if standalone {
+                                processing(&app, &state, "inserting", "Pasting saved text");
+                            }
+                            let id = generation;
+                            let operation = feedback.begin(id, standalone);
                             let st = state.clone();
                             delivery = cancellation.child_token();
                             let token = delivery.clone();
@@ -1097,9 +1135,12 @@ async fn actor(
                                     },
                                 )
                                 .await;
-                                if let Err(e) = result {
-                                    let _ = st.tx.send(Message::ClipboardWarning(e));
-                                }
+                                st.diagnostics.record(
+                                    id,
+                                    "inserting",
+                                    lifecycle::native_outcome(&result),
+                                );
+                                let _ = st.tx.send(Message::ManualDelivery(id, operation, result));
                             });
                         }
                     }
@@ -1228,7 +1269,7 @@ async fn actor(
                         v.stage.clear();
                         v.message="The microphone did not start. Check the selected device and try again.".into();
                     });
-                    schedule_hide(state.tx.clone(), id, 2500);
+                    schedule_hide(&state, id, 2500);
                 }
             }
             Message::Action(action @ (Action::Push | Action::HandsFree | Action::Command)) => {
@@ -1351,7 +1392,7 @@ async fn actor(
                         v.preview_id = None;
                         v.preview_kind.clear();
                     });
-                    schedule_hide(state.tx.clone(), generation, 2500);
+                    schedule_hide(&state, generation, 2500);
                     continue;
                 }
                 let double = settings.double_tap
@@ -1497,7 +1538,7 @@ async fn actor(
                             v.warning = e;
                         });
                         if pending.is_none() {
-                            schedule_hide(state.tx.clone(), id, 2500);
+                            schedule_hide(&state, id, 2500);
                         }
                     }
                 }
@@ -1560,7 +1601,7 @@ async fn actor(
                             .map(|_| "Microphone test complete. No audio was sent.".into())
                             .unwrap_or_else(|e| e);
                     });
-                    schedule_hide(state.tx.clone(), id, 2500);
+                    schedule_hide(&state, id, 2500);
                     continue;
                 }
                 match result {
@@ -1571,7 +1612,7 @@ async fn actor(
                             v.message = e;
                             v.level = 0.0;
                         });
-                        schedule_hide(state.tx.clone(), id, 2500);
+                        schedule_hide(&state, id, 2500);
                     }
                     Ok(recording) => {
                         publish(&app, &state, |v| {
@@ -1603,7 +1644,7 @@ async fn actor(
                             v.stage.clear();
                             v.message = e;
                         });
-                        schedule_hide(state.tx.clone(), id, 2500);
+                        schedule_hide(&state, id, 2500);
                     }
                     Ok(mut done) => {
                         if let Some(clip_id) = done.recovery_id.clone() {
@@ -1683,6 +1724,65 @@ async fn actor(
                             });
                         }
                     }
+                }
+            }
+            Message::ManualDelivery(id, operation, result) => {
+                if id != generation {
+                    continue;
+                }
+                let Some(standalone) = feedback.complete(id, operation) else {
+                    continue;
+                };
+                if standalone && session.is_none() && pending.is_none() {
+                    publish(&app, &state, |v| {
+                        v.stage.clear();
+                        match result {
+                            Ok(warning) => {
+                                v.phase = "success".into();
+                                v.message = "Pasted".into();
+                                v.warning = warning;
+                                v.recoverable = false;
+                            }
+                            Err(error) => {
+                                v.phase = "error".into();
+                                v.message = "Your text is still here".into();
+                                v.warning = error;
+                                v.recoverable = !v.last_text.is_empty();
+                            }
+                        }
+                    });
+                    schedule_hide(&state, id, 2500);
+                } else if let Err(error) = result {
+                    let _ = state.tx.send(Message::ClipboardWarning(error));
+                }
+            }
+            Message::Copied(id, operation, result) => {
+                if id != generation {
+                    continue;
+                }
+                let Some(standalone) = feedback.complete(id, operation) else {
+                    continue;
+                };
+                if standalone && session.is_none() && pending.is_none() {
+                    publish(&app, &state, |v| {
+                        v.stage.clear();
+                        match result {
+                            Ok(()) => {
+                                v.phase = "success".into();
+                                v.message = "Copied · paste it wherever you like".into();
+                                v.warning.clear();
+                                v.recoverable = false;
+                            }
+                            Err(error) => {
+                                v.phase = "error".into();
+                                v.message = "Could not copy yet".into();
+                                v.warning = error;
+                            }
+                        }
+                    });
+                    schedule_hide(&state, id, 1800);
+                } else if let Err(error) = result {
+                    let _ = state.tx.send(Message::ClipboardWarning(error));
                 }
             }
             Message::ClipboardWarning(warning) => publish(&app, &state, |v| {
@@ -1766,11 +1866,12 @@ async fn actor(
                 });
                 if succeeded {
                     pending = None;
-                    schedule_hide(state.tx.clone(), id, 2500);
+                    schedule_hide(&state, id, 2500);
                 }
             }
-            Message::Hide(id) => {
+            Message::Hide(id, ticket) => {
                 if id == generation
+                    && state.visibility.current(ticket)
                     && session.is_none()
                     && pending.is_none()
                     && state.view.lock().unwrap().phase != "processing"
@@ -1911,11 +2012,9 @@ fn recover_text(state: State<Arc<AppState>>, text: String) -> Result<(), String>
     if text.len() > 100_000 {
         return Err("Text is too large.".into());
     }
-    state
-        .view
-        .lock()
-        .map_err(|_| "State unavailable")?
-        .last_text = text;
+    let mut view = state.view.lock().map_err(|_| "State unavailable")?;
+    view.recoverable = !text.is_empty();
+    view.last_text = text;
     Ok(())
 }
 #[tauri::command]
@@ -2121,6 +2220,7 @@ pub fn run() {
                 delivery_cancel: Mutex::new(CancellationToken::new()),
                 native_slots: Arc::new(Semaphore::new(2)),
                 diagnostics: Diagnostics::default(),
+                visibility: lifecycle::VisibilityClock::default(),
             });
             let (hook_tx, hook_rx) = mpsc::channel();
             if let Err(e) = native::start_hooks(&settings.shortcuts, hook_tx.clone()) {

@@ -59,7 +59,7 @@ pub fn polish_instruction(style: &WritingStyle) -> String {
         WritingStyle::Standard => "Use normal sentence capitalization and punctuation. Use periods for complete sentences, not short fragments or headings. Divide long prose into readable paragraphs at topic boundaries. Format clearly introduced or enumerated items as • bullet lines; keep all sentences belonging to one item together and retain prose before and after the list. Do not turn ordinary conjunctions into lists.",
         WritingStyle::Formal => "Use concise, professional, grammatical language with normal capitalization and punctuation. Prefer direct wording over elaborate or inflated language. Use periods for complete sentences, not short fragments or headings. Divide long prose into paragraphs by topic. Format clearly introduced or enumerated items as • bullet lines; keep all sentences belonging to one item together and retain surrounding prose. Preserve the speaker's level of certainty, requests, intent and every unretracted detail.",
     };
-    format!("{POLISH_INSTRUCTION} {style}")
+    format!("{POLISH_INSTRUCTION} {style} Honor explicit formatting commands. When a numbered list is explicitly requested, use 1., 2., 3. lines and preserve item order; otherwise do not invent numbering. Preserve existing numbered list structure.")
 }
 
 pub fn cleanup(input: &str, mode: &Mode, entries: &[Entry], style: &WritingStyle) -> LocalCleanup {
@@ -72,7 +72,7 @@ pub fn cleanup(input: &str, mode: &Mode, entries: &[Entry], style: &WritingStyle
     let (resolved, corrections) = resolve_corrections(input);
     // Remove recognizer-supplied sentence dots before interpreting explicit voice
     // commands. Thus "full stop" still works in Casual, including beside a URL.
-    let source = if *style == WritingStyle::Casual {
+    let source = if *style == WritingStyle::Casual && !NUMBERED_COMMAND.is_match(resolved.trim()) {
         without_sentence_dots(&resolved).replace(['\r', '\n'], " ")
     } else {
         resolved
@@ -91,6 +91,22 @@ pub fn finish_style(input: &str, layout: &str, mode: &Mode, style: &WritingStyle
         return input.to_string();
     }
     if *style == WritingStyle::Casual {
+        if NUMBERED_COMMAND.is_match(input.trim()) {
+            return format(input.trim(), "auto", mode)
+                .lines()
+                .map(|line| {
+                    if let Some((number, body)) = line
+                        .split_once(". ")
+                        .filter(|(number, _)| number.parse::<usize>().is_ok())
+                    {
+                        format!("{number}. {}", without_sentence_dots(body))
+                    } else {
+                        without_sentence_dots(line)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         return capitalize_sentences(input.trim());
     }
     let formatted = format(input, layout, mode);
@@ -717,15 +733,32 @@ pub fn validate_cleanup(input: &str, edited: &str) -> Result<(), String> {
 
 /// Structural formatting runs locally; it only changes whitespace, list markers,
 /// and sentence-initial case. Literal mode and non-English speech bypass it.
+static NUMBERED_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:(?:start|create|make) (?:a )?numbered list|(?:format|put) (?:this|that) (?:as|in) a numbered list)\s*[.,:]?\s+").unwrap()
+});
 pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
-    if layout == "off" || *mode == Mode::Literal || input.trim().is_empty() {
+    if *mode == Mode::Literal || input.trim().is_empty() || input.contains("```") {
+        return input.to_string();
+    }
+    if let Some(command) = NUMBERED_COMMAND.find(input) {
+        let result = format(
+            &format!("Numbered list: {}", &input[command.end()..]),
+            "auto",
+            mode,
+        );
+        return result
+            .strip_prefix("Numbered list:\n")
+            .unwrap_or(&result)
+            .to_string();
+    }
+    if layout == "off" {
         return input.to_string();
     }
     static HEADING: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)^((?:(?:here are|these are) (?:my |the )?)?(?:my )?(?:meeting notes|notes|action items|shopping list|to.do list|bullet points|tasks|priorities|key points|agenda|things to (?:bring|do|remember)|i need the following)|(?:here is|here's) what (?:we|i|you) need|(?:i|we) need (?:the following|(?:two|three|four|five|six|seven|eight|nine|ten|\d+) (?:things|items|tasks))|there are (?:two|three|four|five|six|seven|eight|nine|ten|\d+) (?:things|items|tasks|priorities))\s*[.!:]?\s+").unwrap()
+        Regex::new(r"(?i)^((?:(?:here are|these are) (?:my |the )?)?(?:my )?(?:numbered list|meeting notes|notes|action items|shopping list|to.do list|bullet points|tasks|priorities|key points|agenda|things to (?:bring|do|remember)|i need the following)|(?:here is|here's) what (?:we|i|you) need|(?:i|we) need (?:the following|(?:two|three|four|five|six|seven|eight|nine|ten|\d+) (?:things|items|tasks))|there are (?:two|three|four|five|six|seven|eight|nine|ten|\d+) (?:things|items|tasks|priorities))\s*[.!:]?\s+").unwrap()
     });
     static ITEM: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\b((?:number|point|item)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[1-9]|10)(?:\s+(?:point|item))?(?:\s*[,.:)]\s*|\s+)").unwrap()
+        Regex::new(r"(?i)\b((?:number|point|item)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[1-9]\d{0,2})(?:\s+(?:point|item))?(?:\s*[,.:)]\s*|\s+)").unwrap()
     });
     let capital = |s: &str| {
         let s = s.trim();
@@ -738,6 +771,16 @@ pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
         }
     };
     let heading = HEADING.captures(input);
+    let numbered = heading
+        .as_ref()
+        .is_some_and(|h| h[1].to_ascii_lowercase().contains("numbered list"));
+    let item_line = |index: usize, item: &str| {
+        if numbered {
+            format!("{}. {}", index + 1, capital(item))
+        } else {
+            format!("• {}", capital(item))
+        }
+    };
     let body = heading
         .as_ref()
         .map(|h| &input[h.get(0).unwrap().end()..])
@@ -813,7 +856,7 @@ pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
             if item.is_empty() {
                 return input.to_string();
             }
-            items.push(format!("• {}", capital(item)));
+            items.push(item_line(i, item));
         }
         let mut prefix = heading
             .map(|h| format!("{}:\n", capital(&h[1])))
@@ -902,7 +945,7 @@ pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
                         {
                             value = &value[4..];
                         }
-                        format!("• {}", capital(value))
+                        item_line(i, value)
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -918,7 +961,8 @@ pub fn format(input: &str, layout: &str, mode: &Mode) -> String {
         return prefix
             + &parts
                 .iter()
-                .map(|s| format!("• {}", capital(s)))
+                .enumerate()
+                .map(|(i, s)| item_line(i, s))
                 .collect::<Vec<_>>()
                 .join("\n");
     }
@@ -1029,6 +1073,50 @@ pub fn validate_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_numbered_lists_preserve_items_and_work_in_every_writing_style() {
+        let source = "Start a numbered list. First, confirm ProjectQuartz with Maya. Keep the deadline at 14:30. Second, send https://example.com/v2 to Lee. Separately, do not change the budget.";
+        for style in [
+            WritingStyle::Casual,
+            WritingStyle::Standard,
+            WritingStyle::Formal,
+        ] {
+            let cleaned = cleanup(source, &Mode::Clean, &[], &style);
+            let output = finish_style(&cleaned.text, "off", &Mode::Clean, &style);
+            assert!(
+                output.starts_with("1. Confirm ProjectQuartz with Maya"),
+                "{output}"
+            );
+            assert!(output.contains("Keep the deadline at 14:30"), "{output}");
+            assert!(
+                output.contains("\n2. Send https://example.com/v2 to Lee"),
+                "{output}"
+            );
+            assert!(
+                output.contains("\n\nSeparately, do not change the budget"),
+                "{output}"
+            );
+            assert!(!output.contains("•") && !output.contains("Start a numbered list"));
+        }
+        assert_eq!(format(source, "auto", &Mode::Literal), source);
+        let ordinary =
+            "We discussed a numbered list during the meeting. Nothing needs to be changed.";
+        assert_eq!(format(ordinary, "auto", &Mode::Clean), ordinary);
+    }
+    #[test]
+    fn numeric_lists_beyond_ten_do_not_merge_the_tail() {
+        let input = format!(
+            "My numbered list: {}",
+            (1..=15)
+                .map(|n| format!("{n}. Keep item {n}."))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let output = format(&input, "auto", &Mode::Clean);
+        assert!(output.contains("\n11. Keep item 11."), "{output}");
+        assert!(output.ends_with("15. Keep item 15."), "{output}");
+        assert_eq!(output.lines().count(), 16);
+    }
     #[test]
     fn styles_resolve_the_last_explicit_count_without_rewriting_unrelated_facts() {
         for (input, expected, changes) in [

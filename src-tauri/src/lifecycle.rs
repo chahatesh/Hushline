@@ -3,11 +3,24 @@
 use crate::{model::StageDiagnostic, shortcuts::Action};
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::Instant,
 };
 #[derive(Default)]
 pub struct Diagnostics(Mutex<Trace>);
+#[derive(Default)]
+pub struct VisibilityClock(AtomicU64);
+impl VisibilityClock {
+    pub fn renew(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::Relaxed) + 1
+    }
+    pub fn current(&self, ticket: u64) -> bool {
+        self.0.load(Ordering::Relaxed) == ticket
+    }
+}
 #[derive(Default)]
 struct Trace {
     starts: BTreeMap<u64, Instant>,
@@ -94,6 +107,8 @@ pub fn native_outcome<T>(result: &Result<T, String>) -> &'static str {
         "clipboard_unsupported"
     } else if error.contains("clipboard") && error.contains("busy") {
         "clipboard_busy"
+    } else if error.contains("clipboard") {
+        "native_error"
     } else if error.contains("changed")
         || error.contains("owning window")
         || error.contains("active window")
@@ -124,6 +139,31 @@ pub fn blocks_delivery(action: Action) -> bool {
 }
 pub fn may_start(held: bool, hands_free: bool) -> bool {
     held || hands_free
+}
+/// Latest manual recovery action owns feedback; an older timeout cannot replace
+/// a newer paste/copy result or a new recording's status.
+#[derive(Default)]
+pub struct FeedbackGate {
+    next: u64,
+    pending: Option<(u64, u64, bool)>,
+}
+impl FeedbackGate {
+    pub fn begin(&mut self, generation: u64, standalone: bool) -> u64 {
+        let standalone = standalone || self.pending.is_some_and(|(g, _, s)| g == generation && s);
+        self.next += 1;
+        self.pending = Some((generation, self.next, standalone));
+        self.next
+    }
+    pub fn complete(&mut self, generation: u64, operation: u64) -> Option<bool> {
+        if self
+            .pending
+            .is_some_and(|(g, o, _)| g == generation && o == operation)
+        {
+            self.pending.take().map(|(_, _, standalone)| standalone)
+        } else {
+            None
+        }
+    }
 }
 /// A completed hold is never a tap, even if the next recording starts quickly.
 pub fn is_short_tap(elapsed: std::time::Duration) -> bool {
@@ -182,6 +222,29 @@ impl PushGate {
 mod tests {
     use super::*;
     #[test]
+    fn an_old_error_timer_cannot_hide_a_new_copy_or_paste_status() {
+        let clock = VisibilityClock::default();
+        let error = clock.renew();
+        let pasted = clock.renew();
+        assert!(!clock.current(error));
+        assert!(clock.current(pasted));
+        clock.renew();
+        assert!(!clock.current(pasted));
+    }
+    #[test]
+    fn stale_recovery_feedback_cannot_replace_a_new_paste_or_recording() {
+        let mut gate = FeedbackGate::default();
+        let old = gate.begin(1, true);
+        let new = gate.begin(1, false);
+        assert_eq!(gate.complete(1, old), None);
+        assert_eq!(gate.complete(1, new), Some(true));
+        assert_eq!(gate.complete(1, new), None);
+        let old = gate.begin(1, true);
+        let fresh = gate.begin(2, false);
+        assert_eq!(gate.complete(1, old), None);
+        assert_eq!(gate.complete(2, fresh), Some(false));
+    }
+    #[test]
     fn native_failure_diagnostics_include_only_fixed_reason_codes() {
         assert_eq!(native_outcome(&Ok::<_, String>(())), "completed");
         for (error, expected) in [
@@ -199,6 +262,10 @@ mod tests {
             ("The field took too long to respond", "native_timeout"),
             ("Focus an editable field", "unsupported_field"),
             ("private text or secret-key", "native_error"),
+            (
+                "Cannot snapshot the clipboard. Nothing was changed.",
+                "native_error",
+            ),
         ] {
             assert_eq!(native_outcome::<()>(&Err(error.into())), expected);
         }

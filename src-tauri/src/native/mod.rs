@@ -4,6 +4,8 @@ mod clipboard;
 #[cfg(windows)]
 mod cue;
 #[cfg(windows)]
+mod edit;
+#[cfg(windows)]
 mod hooks;
 #[cfg(windows)]
 mod overlay;
@@ -32,6 +34,15 @@ pub struct Target {
     pub app: String,
     pub epoch: u64,
     pub terminal: bool,
+    pub native_edit: Option<NativeSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSelection {
+    pub hwnd: isize,
+    pub start: u32,
+    pub end: u32,
+    pub length: usize,
 }
 
 /// An explicitly requested, transient copy of one editable field. Never persisted.

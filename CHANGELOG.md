@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 — unreleased
+
+- Insert into supported Unicode Windows edit controls in one undoable native operation, without typing or changing the clipboard. Recheck the field, selection, cancellation and input generation; uncertain delivery is never automatically repeated.
+- Preserve native bitmap and enhanced-metafile clipboard images alongside supported text/rich-text formats. Bound snapshots to 32 MiB per format and 96 MiB total; refuse unsupported formats before mutation and protect newer user copies.
+- Add **Paste here** and **Copy text** to recovery cards above the pill. Prevent stale copy/paste results and hide timers from replacing newer feedback.
+- Honor explicit numbered-list commands in Casual, Standard and Formal, preserving multi-sentence items, surrounding prose and sequential numeric items beyond ten. Exact-word behavior stays unchanged.
+- Cancel abandoned preparation quietly, fix light-theme native text contrast, and show the selected speech model on Home. Preserve existing shortcuts, profiles, identifiers and credentials.
+- Add real cross-process Windows edit/Undo/protection tests, image ownership and clipboard checks, recovery hit-test/nonactivation checks, and list regressions. Live microphone-to-Groq-to-Notepad/browser acceptance is still required before a public Release.
+
 ## 0.4.2 — unreleased
 
 - Keep the original text field authorized when the nonactivating pill is clicked to stop. Ordinary clicks, scrolling, focus changes, protected fields, and cancellation still prevent unsafe delivery.

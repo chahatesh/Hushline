@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Clipboard insertion is optional. Unsupported formats cause a refusal before mutation.
+//! Bounded clipboard preservation, including native images. Unknown handle types
+//! cause a refusal before mutation, never a destructive best-effort snapshot.
 use super::{capture_target, input_epoch, Target};
 use std::{
     mem::size_of,
@@ -10,11 +11,79 @@ use windows::{
     core::w,
     Win32::{
         Foundation::*,
+        Graphics::Gdi::*,
         System::{DataExchange::*, Memory::*},
         UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
     },
 };
 type Result<T> = std::result::Result<T, String>;
+const MAX_FORMAT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES: usize = 96 * 1024 * 1024;
+type Saved = Vec<(u32, SavedData)>;
+#[derive(Debug)]
+enum SavedData {
+    Bytes(Vec<u8>),
+    Bitmap(HBITMAP),
+    Enhanced(HENHMETAFILE),
+}
+impl Drop for SavedData {
+    fn drop(&mut self) {
+        unsafe {
+            match self {
+                Self::Bitmap(bitmap) => {
+                    let _ = DeleteObject(HGDIOBJ(bitmap.0));
+                }
+                Self::Enhanced(metafile) => {
+                    let _ = DeleteEnhMetaFile(Some(*metafile));
+                }
+                Self::Bytes(_) => {}
+            }
+        }
+    }
+}
+fn fits_snapshot(size: usize, total: usize) -> bool {
+    size > 0
+        && size <= MAX_FORMAT_BYTES
+        && total
+            .checked_add(size)
+            .is_some_and(|n| n <= MAX_SNAPSHOT_BYTES)
+}
+unsafe fn clone_bitmap(bitmap: HBITMAP) -> Result<HBITMAP> {
+    CopyImage(HANDLE(bitmap.0), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)
+        .map(|handle| HBITMAP(handle.0))
+        .map_err(|_| "Clipboard image could not be preserved. Nothing was changed.".into())
+}
+unsafe fn clone_enhanced(metafile: HENHMETAFILE) -> Result<HENHMETAFILE> {
+    let cloned = CopyEnhMetaFileW(metafile, windows::core::PCWSTR::null());
+    if cloned.0.is_null() {
+        Err("Clipboard drawing could not be preserved. Nothing was changed.".into())
+    } else {
+        Ok(cloned)
+    }
+}
+impl SavedData {
+    unsafe fn publish(&self, format: u32) -> Result<()> {
+        // Keep the saved object alive; transfer a separate clone to Windows.
+        let copy = match self {
+            Self::Bytes(data) => return set_raw(format, data),
+            Self::Bitmap(bitmap) => Self::Bitmap(clone_bitmap(*bitmap)?),
+            Self::Enhanced(metafile) => Self::Enhanced(clone_enhanced(*metafile)?),
+        };
+        let handle = match &copy {
+            Self::Bitmap(bitmap) => HANDLE(bitmap.0),
+            Self::Enhanced(metafile) => HANDLE(metafile.0),
+            _ => unreachable!(),
+        };
+        SetClipboardData(format, Some(handle))
+            .map_err(|_| "Could not restore the clipboard image.")?;
+        std::mem::forget(copy); // Windows owns the published GDI object now.
+        Ok(())
+    }
+    #[cfg(test)]
+    fn starts_with(&self, prefix: &[u8]) -> bool {
+        matches!(self, Self::Bytes(data) if data.starts_with(prefix))
+    }
+}
 const MAX_PASTE_WORKERS: usize = 2;
 static PASTE_WORKERS: AtomicUsize = AtomicUsize::new(0);
 struct WorkerPermit<'a>(&'a AtomicUsize);
@@ -119,7 +188,7 @@ pub fn copy_text(text: &str) -> Result<()> {
         set_raw(13, &bytes(text))
     }
 }
-unsafe fn snapshot() -> Result<Vec<(u32, Vec<u8>)>> {
+unsafe fn snapshot() -> Result<Saved> {
     let mut format = 0;
     let mut all = Vec::new();
     let mut total = 0;
@@ -128,15 +197,52 @@ unsafe fn snapshot() -> Result<Vec<(u32, Vec<u8>)>> {
         if format == 0 {
             break;
         }
-        // Handles to GDI objects / owner-display data cannot be duplicated as global memory.
-        if [2, 3, 9, 14, 0x80, 0x81, 0x82, 0x83, 0x8e].contains(&format) {
-            return Err("Clipboard contains a format Hushline cannot restore safely. Choose Unicode insertion or copy the transcript manually.".into());
+        // Owner-display, classic metafile pictures, palettes and private handle
+        // formats need their own ownership protocols; never treat them as bytes.
+        if [3, 9, 0x80, 0x83].contains(&format) || (0x200..0x400).contains(&format) {
+            return Err("Clipboard contains an unsupported format that cannot be restored safely. Your transcript is ready to copy.".into());
         }
         let handle = GetClipboardData(format)
             .map_err(|_| "Cannot snapshot the clipboard. Nothing was changed.")?;
+        if matches!(format, 2 | 0x82) {
+            let mut info = BITMAP::default();
+            if GetObjectW(
+                HGDIOBJ(handle.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut info as *mut _ as *mut _),
+            ) == 0
+            {
+                return Err("Clipboard image could not be inspected. Nothing was changed.".into());
+            }
+            let len = (info.bmWidthBytes.unsigned_abs() as usize)
+                .saturating_mul(info.bmHeight.unsigned_abs() as usize)
+                .saturating_mul(info.bmPlanes as usize);
+            if !fits_snapshot(len, total) {
+                return Err(
+                    "Clipboard image is too large to preserve safely. Nothing was changed.".into(),
+                );
+            }
+            all.push((format, SavedData::Bitmap(clone_bitmap(HBITMAP(handle.0))?)));
+            total += len;
+            continue;
+        }
+        if matches!(format, 14 | 0x8e) {
+            let len = GetEnhMetaFileBits(HENHMETAFILE(handle.0), None) as usize;
+            if !fits_snapshot(len, total) {
+                return Err(
+                    "Clipboard drawing is too large or unsupported. Nothing was changed.".into(),
+                );
+            }
+            all.push((
+                format,
+                SavedData::Enhanced(clone_enhanced(HENHMETAFILE(handle.0))?),
+            ));
+            total += len;
+            continue;
+        }
         let memory = HGLOBAL(handle.0);
         let len = GlobalSize(memory);
-        if len == 0 || len > 16_000_000 || total + len > 32_000_000 {
+        if !fits_snapshot(len, total) {
             return Err("Clipboard is too large or uses an unsupported format. Nothing was changed; use Unicode insertion.".into());
         }
         let data = GlobalLock(memory);
@@ -146,20 +252,20 @@ unsafe fn snapshot() -> Result<Vec<(u32, Vec<u8>)>> {
         let copy = std::slice::from_raw_parts(data as *const u8, len).to_vec();
         let _ = GlobalUnlock(memory);
         total += len;
-        all.push((format, copy));
+        all.push((format, SavedData::Bytes(copy)));
     }
     Ok(all)
 }
-unsafe fn restore(all: &[(u32, Vec<u8>)]) -> Result<()> {
+unsafe fn restore(all: &[(u32, SavedData)]) -> Result<()> {
     EmptyClipboard().map_err(|_| "Cannot restore the clipboard.")?;
     for (format, data) in all {
-        set_raw(*format, data)?;
+        data.publish(*format)?;
     }
     Ok(())
 }
 struct PendingRestore {
     owner: Owner,
-    saved: Vec<(u32, Vec<u8>)>,
+    saved: Saved,
     sequence: u32,
     delivered: bool,
 }
@@ -226,13 +332,7 @@ fn prepare_paste(
     // A slow/out-of-process accessibility provider must never hold or replace
     // the user's clipboard while it is being inspected.
     let current = capture_target(!target.selected.is_empty())?;
-    if current.hwnd != target.hwnd
-        || current.runtime != target.runtime
-        || current.runtime.is_empty()
-        || current.caret != target.caret
-        || current.selected != target.selected
-        || (!explicit && current.epoch != target.epoch)
-    {
+    if !super::windows::target_matches(target, &current, explicit) {
         return Err("The field changed before insertion. Your text is ready to copy.".into());
     }
     if cancel.is_cancelled() {
@@ -348,6 +448,210 @@ mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+    #[test]
+    fn snapshot_budget_is_bounded_even_for_overflowing_metadata() {
+        assert!(fits_snapshot(32 * 1024 * 1024, 64 * 1024 * 1024));
+        assert!(!fits_snapshot(0, 0));
+        assert!(!fits_snapshot(MAX_FORMAT_BYTES + 1, 0));
+        assert!(!fits_snapshot(1, MAX_SNAPSHOT_BYTES));
+        assert!(!fits_snapshot(1024, usize::MAX));
+    }
+    #[test]
+    fn enhanced_drawing_copy_keeps_its_records_after_original_is_freed() {
+        unsafe {
+            let dc = CreateEnhMetaFileW(
+                None,
+                windows::core::PCWSTR::null(),
+                None,
+                windows::core::PCWSTR::null(),
+            );
+            assert!(!dc.0.is_null());
+            let _ = Rectangle(dc, 1, 1, 20, 20);
+            let original = SavedData::Enhanced(CloseEnhMetaFile(dc));
+            let SavedData::Enhanced(handle) = original else {
+                unreachable!()
+            };
+            let copy = SavedData::Enhanced(clone_enhanced(handle).unwrap());
+            let SavedData::Enhanced(cloned) = copy else {
+                unreachable!()
+            };
+            let mut expected = vec![0; GetEnhMetaFileBits(handle, None) as usize];
+            assert_eq!(
+                GetEnhMetaFileBits(handle, Some(&mut expected)) as usize,
+                expected.len()
+            );
+            drop(original);
+            let mut actual = vec![0; GetEnhMetaFileBits(cloned, None) as usize];
+            assert_eq!(
+                GetEnhMetaFileBits(cloned, Some(&mut actual)) as usize,
+                actual.len()
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+    #[test]
+    #[ignore = "Temporarily publishes an owned 4x4 bitmap and restores the original clipboard; no focus or private-data output."]
+    fn native_image_clipboard_roundtrip() {
+        struct Guard {
+            owner: Owner,
+            saved: Saved,
+            sequence: u32,
+        }
+        impl Guard {
+            fn current(&self) {
+                assert!(
+                    publication_matches(
+                        self.owner.0,
+                        unsafe { GetClipboardOwner() }.unwrap_or_default(),
+                        self.sequence,
+                        unsafe { GetClipboardSequenceNumber() }
+                    ),
+                    "A newer copy was preserved"
+                );
+            }
+            fn claim(&mut self) {
+                assert_eq!(
+                    unsafe { GetClipboardOwner() }.unwrap_or_default(),
+                    self.owner.0,
+                    "A newer copy was preserved"
+                );
+                self.sequence = unsafe { GetClipboardSequenceNumber() };
+            }
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                if publication_matches(
+                    self.owner.0,
+                    unsafe { GetClipboardOwner() }.unwrap_or_default(),
+                    self.sequence,
+                    unsafe { GetClipboardSequenceNumber() },
+                ) {
+                    if let Ok(lock) = open(self.owner.0) {
+                        if publication_matches(
+                            self.owner.0,
+                            unsafe { GetClipboardOwner() }.unwrap_or_default(),
+                            self.sequence,
+                            unsafe { GetClipboardSequenceNumber() },
+                        ) {
+                            if let Err(error) = unsafe { restore(&self.saved) } {
+                                eprintln!("Owned clipboard fixture could not restore its snapshot: {error}");
+                            }
+                        }
+                        drop(lock);
+                    }
+                }
+            }
+        }
+        let owner = Owner::new().unwrap();
+        let (saved, original_sequence, original_owner) = {
+            let lock = open(owner.0).unwrap();
+            let saved = unsafe { snapshot().unwrap() };
+            let sequence = unsafe { GetClipboardSequenceNumber() };
+            let original_owner = unsafe { GetClipboardOwner() }.unwrap_or_default();
+            drop(lock);
+            (saved, sequence, original_owner)
+        };
+        let mut guard = Guard {
+            owner,
+            saved,
+            sequence: 0,
+        };
+        let lock = open(guard.owner.0).unwrap();
+        assert_eq!(
+            unsafe { GetClipboardSequenceNumber() },
+            original_sequence,
+            "A newer copy was preserved"
+        );
+        assert_eq!(
+            unsafe { GetClipboardOwner() }.unwrap_or_default(),
+            original_owner,
+            "A newer copy was preserved"
+        );
+        let pixels = [0x00336699u32; 16];
+        unsafe {
+            let bitmap =
+                SavedData::Bitmap(CreateBitmap(4, 4, 1, 32, Some(pixels.as_ptr() as *const _)));
+            let SavedData::Bitmap(handle) = bitmap else {
+                unreachable!()
+            };
+            assert!(!handle.0.is_null());
+            EmptyClipboard().unwrap();
+            if let Err(error) = bitmap.publish(2) {
+                let _ = restore(&guard.saved);
+                panic!("{error}");
+            }
+        }
+        drop(lock);
+        guard.claim();
+        let lock = open(guard.owner.0).unwrap();
+        guard.current();
+        let image = unsafe { snapshot().expect("Copied images must not block paste") };
+        assert!(image
+            .iter()
+            .any(|(format, value)| *format == 2 && matches!(value, SavedData::Bitmap(_))));
+        unsafe {
+            EmptyClipboard().unwrap();
+            set_raw(13, &bytes("Hush owned image roundtrip")).unwrap();
+        }
+        drop(lock);
+        guard.claim();
+        let lock = open(guard.owner.0).unwrap();
+        guard.current();
+        unsafe {
+            restore(&image).unwrap();
+        }
+        drop(lock);
+        guard.claim();
+        let lock = open(guard.owner.0).unwrap();
+        guard.current();
+        let restored = unsafe { snapshot().unwrap() };
+        assert!(restored
+            .iter()
+            .any(|(format, value)| *format == 2 && matches!(value, SavedData::Bitmap(_))));
+        drop(lock);
+    }
+    #[test]
+    fn native_bitmap_copy_is_independent_and_preserves_rgb_pixels() {
+        unsafe {
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = 4;
+            info.bmiHeader.biHeight = -4;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            let mut bits = std::ptr::null_mut();
+            let original = SavedData::Bitmap(
+                CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0).unwrap(),
+            );
+            std::slice::from_raw_parts_mut(bits as *mut u32, 16).fill(0x00664422);
+            let SavedData::Bitmap(bitmap) = original else {
+                unreachable!()
+            };
+            let copy = SavedData::Bitmap(clone_bitmap(bitmap).unwrap());
+            let SavedData::Bitmap(cloned) = copy else {
+                unreachable!()
+            };
+            assert_ne!(bitmap, cloned);
+            drop(original);
+            let mut result = BITMAP::default();
+            assert_ne!(
+                GetObjectW(
+                    HGDIOBJ(cloned.0),
+                    size_of::<BITMAP>() as i32,
+                    Some(&mut result as *mut _ as *mut _)
+                ),
+                0
+            );
+            assert_eq!(
+                (result.bmWidth, result.bmHeight.abs(), result.bmBitsPixel),
+                (4, 4, 32)
+            );
+            assert!(!result.bmBits.is_null());
+            assert!(std::slice::from_raw_parts(result.bmBits as *const u32, 16)
+                .iter()
+                .all(|pixel| pixel & 0x00ff_ffff == 0x0066_4422));
+        }
+    }
     #[test]
     fn clipboard_worker_capacity_is_bounded_until_actual_worker_release() {
         let active = AtomicUsize::new(0);
@@ -482,7 +786,7 @@ mod integration_tests {
         // A guard restores only our sentinel; it never overwrites a user's newer copy.
         struct Restore {
             owner: Owner,
-            data: Vec<(u32, Vec<u8>)>,
+            data: Saved,
             sequence: u32,
             previous: HWND,
         }

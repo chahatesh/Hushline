@@ -1,5 +1,15 @@
 # Quality and release verification
 
+## 0.5.0 delivery, recovery and writing
+
+The default smart-paste path now uses one undoable native edit for documented Unicode Windows Edit/RichEdit controls. A real child-process Win32 fixture verifies marshalled multiline insertion, selected-range replacement, Undo, password/read-only refusal, cancellation and foreground rejection. It does not simulate the recording pipeline or establish Notepad/browser acceptance. Browser/custom controls still use guarded clipboard delivery. Native selection metadata lets visual reflow occur without treating it as a caret change; changed indices, length, identity or input generation still refuse insertion.
+
+Clipboard support now clones bitmap and enhanced-metafile handles with explicit ownership and bounded memory. Native image copy tests and an actual owned clipboard image → text → image round-trip are separate from live application delivery. Palette, classic metafile, owner-display and unsupported private-handle formats remain refused before mutation. Restoration checks both clipboard owner and post-close sequence and never overwrites a newer copy.
+
+Recovery cards offer explicit Paste here and Copy text controls without taking focus. Regressions cover scaled button geometry, preview exclusion, stale manual feedback, old hide timers, explicit numbered lists across all writing styles, preserved surrounding prose and lists longer than ten. Casual retains spoken list commands without automatic punctuation; exact-word mode is unchanged.
+
+Executed checks: **110 Rust tests passed**, **21 default ignored tests**, **10 frontend tests**, **16 browser tests**, formatting, strict linting, type checking and production build. Additional ignored native checks passed: recovery buttons/nonactivation in both themes, overlay collapse, and guarded image clipboard round-trip. Native recovery captures were reviewed at 96 DPI. [Component report](verification/update-0.5.0.json). Versioned reports below retain earlier checks. Full user microphone → Groq → Notepad/browser acceptance, ready-sound audibility, broad application compatibility, physical mixed-DPI monitors, and whole-field prompt editing remain open. No public Release is published on the strength of component fixtures alone.
+
 ## 0.4.2 stop and paste reliability
 
 The global mouse hook counted the nonactivating overlay's stop click as a cursor edit, invalidating the original field before paste. Only left clicks whose native hit test resolves to this process's overlay are now exempted. Other clicks/scrolls, foreground and field validation, clipboard ownership, cancellation, protected fields, and terminal safeguards remain enforced.

@@ -251,6 +251,10 @@ fn inspect_focused(
                 app,
                 epoch,
                 terminal,
+                native_edit: element
+                    .CurrentNativeWindowHandle()
+                    .ok()
+                    .and_then(|window| super::edit::inspect(window, hwnd)),
             },
             element,
         ))
@@ -546,6 +550,23 @@ pub fn insert_with_notice(
         return Err("Cancelled".into());
     }
     if method == "clipboard" {
+        if target.native_edit.is_some() {
+            let current = capture_target(!target.selected.is_empty())?;
+            if !target_matches(target, &current, authorized_preview) {
+                return Err(
+                    "The field changed before insertion. Your text is ready to copy.".into(),
+                );
+            }
+            if let Some(selection) = &current.native_edit {
+                let result = super::edit::insert(&current, selection, text, cancel);
+                if result.is_ok() {
+                    if let Some(notice) = notice {
+                        notice(String::new());
+                    }
+                }
+                return result;
+            }
+        }
         // The worker inspects the field before touching clipboard contents.
         return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
     }
@@ -562,11 +583,15 @@ pub fn insert_with_notice(
     unicode_text(text)?;
     Ok("Inserted using Windows Unicode input. The receiving application does not provide a delivery receipt.".into())
 }
-fn target_matches(a: &Target, b: &Target, explicit: bool) -> bool {
+pub(super) fn target_matches(a: &Target, b: &Target, explicit: bool) -> bool {
     a.hwnd == b.hwnd
         && !a.runtime.is_empty()
         && a.runtime == b.runtime
-        && a.caret == b.caret
+        && if a.native_edit.is_some() {
+            a.native_edit == b.native_edit
+        } else {
+            a.caret == b.caret
+        }
         && a.selected == b.selected
         && (explicit || a.epoch == b.epoch)
 }
@@ -697,6 +722,7 @@ mod tests {
             app: "Notepad".into(),
             epoch: 2,
             terminal: false,
+            native_edit: None,
         };
         let mut b = t.clone();
         assert!(target_matches(&t, &b, false));
@@ -705,6 +731,38 @@ mod tests {
         assert!(target_matches(&t, &b, true));
         b.selected = "y".into();
         assert!(!target_matches(&t, &b, true));
+    }
+    #[test]
+    fn native_selection_identity_ignores_only_visual_reflow() {
+        let target = Target {
+            hwnd: 1,
+            runtime: vec![1, 2],
+            caret: vec![10, 20],
+            selected: String::new(),
+            app: "owned native field".into(),
+            epoch: 7,
+            terminal: false,
+            native_edit: Some(super::super::NativeSelection {
+                hwnd: 2,
+                start: 3,
+                end: 5,
+                length: 20,
+            }),
+        };
+        let mut current = target.clone();
+        current.caret = vec![40, 90];
+        assert!(target_matches(&target, &current, false));
+        current.native_edit.as_mut().unwrap().start += 1;
+        assert!(!target_matches(&target, &current, false));
+        current = target.clone();
+        current.native_edit.as_mut().unwrap().length += 1;
+        assert!(!target_matches(&target, &current, false));
+        current = target.clone();
+        current.native_edit.as_mut().unwrap().hwnd += 1;
+        assert!(!target_matches(&target, &current, false));
+        current = target.clone();
+        current.native_edit = None;
+        assert!(!target_matches(&target, &current, false));
     }
     #[test]
     fn whole_field_replacement_requires_exact_identity_and_complete_text() {
@@ -716,6 +774,7 @@ mod tests {
             app: "Notepad".into(),
             epoch: 4,
             terminal: false,
+            native_edit: None,
         };
         let snapshot = WholeFieldSnapshot {
             target: target.clone(),

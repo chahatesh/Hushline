@@ -1,0 +1,16 @@
+{
+  "version": "0.5.0",
+  "rustTestsPassed": 110,
+  "defaultTestsIgnored": 21,
+  "frontendTestsPassed": 10,
+  "dashboardTestsPassed": 16,
+  "formattingTypeCheckBuildClippy": "passed",
+  "nativeExternalEditFixture": "passed: real foreign-process EM_REPLACESEL multiline/selection/Undo, protected/read-only refusal and cancellation/foreground guards",
+  "nativeClipboardImageRoundtrip": "passed: image to text to image with original clipboard restored under owner/sequence guards",
+  "nativeOverlayRecoveryButtons": "passed: light/dark actual GDI render, native Paste/Copy action hit tests, no focus activation",
+  "nativeOverlayCollapseAndNonactivation": "passed",
+  "nativeRecoveryScreenshots": "reviewed light/dark at 96 DPI; physical mixed-DPI monitors remain unverified",
+  "liveMicrophoneToGroqToNotepadAndBrowser": "not verified; public Release gated",
+  "noTranscriptOrAudioInDiagnostics": true,
+  "subagents": "none"
+}

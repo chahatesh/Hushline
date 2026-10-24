@@ -8,7 +8,7 @@ export interface Entry { id: string; source: string; replacement: string }
 export interface Snippet { id: string; trigger: string; content: string; confirm: boolean }
 export interface Style { id: string; name: string; appMatch: string; instruction: string; enhanced: boolean }
 export interface Transcript { id: string; text: string; createdAt: string; app: string; words: number; durationMs: number; latencyMs: number; inserted: boolean }
-export interface View { phase: string; stage: string; message: string; level: number; seconds: number; lastText: string; preview: string | null; previewKind: string; previewId: string | null; original: string | null; hasKey: boolean; generation: number; warning: string }
+export interface View { phase: string; stage: string; message: string; level: number; seconds: number; lastText: string; recoverable: boolean; preview: string | null; previewKind: string; previewId: string | null; original: string | null; hasKey: boolean; generation: number; warning: string }
 export interface OfflineStatus { installed: string[]; engineVersion: string }
 export interface DownloadProgress { stage: string; received: number; total: number }
 export interface SavedAudio { id: string; createdAt: string; durationMs: number; requiresReview: boolean; inMemory: boolean }
@@ -16,7 +16,7 @@ export interface StageDiagnostic { generation: number; stage: string; elapsedMs:
 export interface Snapshot { offline: OfflineStatus; settings: Settings; dictionary: Entry[]; snippets: Snippet[]; styles: Style[]; history: Transcript[]; savedAudio: SavedAudio[]; diagnostics: StageDiagnostic[]; scratchpad: string; view: View; startupEnabled: boolean }
 export interface Backup { version: number; settings: Settings; dictionary: Entry[]; snippets: Snippet[]; styles: Style[] }
 export const defaults: Settings = { preferencesVersion: 5, provider: 'groq', offlineModel: 'tiny', localTextModel: '', formatting: 'auto', dock: 'bottom', microphone: '', prepareMicrophone: true, startupDelayMs: 300, recordingCueEnabled: true, speechModel: 'whisper-large-v3-turbo', cleanupModel: 'openai/gpt-oss-20b', commandModel: 'openai/gpt-oss-120b', language: '', mode: 'clean', writingStyle: 'standard', promptImproveMode: 'clarify', enhanced: false, polishPolicy: 'never', historyEnabled: true, contextEnabled: false, selectionPermission: false, maxSeconds: 600, transcriptionTimeoutSeconds: 5, silenceSeconds: 0, vadThreshold: .012, doubleTap: false, theme: 'system', insertion: 'clipboard', shortcuts: { push: 'Ctrl+Win', handsFree: 'Ctrl+Win+Space', command: 'Ctrl+Win+Alt', improvePrompt: 'Ctrl+Win+P', paste: 'Ctrl+Win+V', copy: 'Ctrl+Win+C', open: 'Ctrl+Win+H', scratchpad: 'Ctrl+Win+J', cancel: 'Escape' } };
-export const emptyView: View = { phase: 'idle', stage: '', message: '', level: 0, seconds: 0, lastText: '', preview: null, previewKind: '', previewId: null, original: null, hasKey: false, generation: 0, warning: '' };
+export const emptyView: View = { phase: 'idle', stage: '', message: '', level: 0, seconds: 0, lastText: '', recoverable: false, preview: null, previewKind: '', previewId: null, original: null, hasKey: false, generation: 0, warning: '' };
 
 function shortcutIdentity(value: string) {
   const parts = value.split('+').map(part => part.trim().toUpperCase());

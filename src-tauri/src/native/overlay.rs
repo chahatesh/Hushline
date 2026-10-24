@@ -39,6 +39,7 @@ struct OverlayView {
     stage: String,
     message: String,
     warning: String,
+    recoverable: bool,
     level: f32,
     seconds: f32,
     dock: String,
@@ -285,6 +286,7 @@ pub fn update(view: &View) {
                 stage: view.stage.clone(),
                 message: view.message.clone(),
                 warning: view.warning.clone(),
+                recoverable: view.recoverable,
                 level: view.level,
                 seconds: view.seconds,
                 dock: v.dock.clone(),
@@ -408,6 +410,7 @@ fn notice_text(view: &OverlayView) -> String {
         return String::new();
     }
     let message = if view.phase == "error"
+        || (view.phase == "success" && (view.recoverable || view.message.starts_with("Copied")))
         || (matches!(view.phase.as_str(), "starting" | "listening")
             && view.message.starts_with("Hands-free"))
     {
@@ -428,7 +431,46 @@ fn notice_id(view: &OverlayView) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     notice_text(view).hash(&mut hash);
+    view.recoverable.hash(&mut hash);
     hash.finish()
+}
+fn can_recover(view: &OverlayView) -> bool {
+    view.recoverable && matches!(view.phase.as_str(), "error" | "success")
+}
+fn recovery_buttons(card: RECT, scale: f64) -> (RECT, RECT) {
+    let padding = (14.0 * scale) as i32;
+    let gap = (8.0 * scale) as i32;
+    let middle = (card.left + card.right) / 2;
+    let top = card.bottom - (36.0 * scale) as i32;
+    let bottom = card.bottom - (10.0 * scale) as i32;
+    (
+        RECT {
+            left: card.left + padding,
+            top,
+            right: middle - gap / 2,
+            bottom,
+        },
+        RECT {
+            left: middle + gap / 2,
+            top,
+            right: card.right - padding,
+            bottom,
+        },
+    )
+}
+fn recovery_action(view: &OverlayView, card: RECT, scale: f64, x: i32, y: i32) -> Option<Action> {
+    if !can_recover(view) || card.bottom == 0 {
+        return None;
+    }
+    let (paste, copy) = recovery_buttons(card, scale);
+    let inside = |r: RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+    if inside(paste) {
+        Some(Action::Paste)
+    } else if inside(copy) {
+        Some(Action::Copy)
+    } else {
+        None
+    }
 }
 fn timer_bounds(width: f64, height: f64, side: bool) -> (f64, f64, f64, f64) {
     if side {
@@ -453,7 +495,13 @@ fn processing_progress(stage: &str) -> usize {
         _ => 0,
     }
 }
-unsafe fn notice_height(hwnd: HWND, p: &Painter, value: &str, width: i32) -> i32 {
+unsafe fn notice_height(
+    hwnd: HWND,
+    p: &Painter,
+    value: &str,
+    width: i32,
+    recoverable: bool,
+) -> i32 {
     if value.is_empty() {
         return 0;
     }
@@ -474,6 +522,11 @@ unsafe fn notice_height(hwnd: HWND, p: &Painter, value: &str, width: i32) -> i32
     let _ = SelectObject(dc, old);
     ReleaseDC(Some(hwnd), dc);
     (rect.bottom + (28.0 * scale) as i32).clamp((60.0 * scale) as i32, (280.0 * scale) as i32)
+        + if recoverable {
+            (36.0 * scale) as i32
+        } else {
+            0
+        }
 }
 unsafe fn geometry(hwnd: HWND, _p: &Painter, rect: RECT) {
     let _ = SetWindowPos(
@@ -518,7 +571,7 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
         notice_text(&view)
     };
     let card_width = ((340.0 * scale) as i32).min(info.rcWork.right - info.rcWork.left - 20);
-    let card_height = notice_height(hwnd, p, &notice, card_width);
+    let card_height = notice_height(hwnd, p, &notice, card_width, can_recover(&view));
     if card_height > 0 {
         let full_width = width.max(card_width);
         let footer = (32.0 * scale) as i32;
@@ -625,14 +678,16 @@ fn timer_alignment(side: bool) -> DRAW_TEXT_FORMAT {
         DT_LEFT
     }
 }
-unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, color: COLORREF, side: bool) {
+unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, _color: COLORREF, side: bool) {
     // An empty Vec has a dangling sentinel pointer. Some Windows text paths
     // inspect the buffer even for a zero character count; never pass it to GDI.
     if value.is_empty() {
         return;
     }
     let previous = SelectObject(hdc, HGDIOBJ(font.0));
-    let _ = SetTextColor(hdc, color);
+    // The DIB is an alpha mask. Drawing dark ink here would multiply its
+    // darkness into coverage and make light-theme labels nearly invisible.
+    let _ = SetTextColor(hdc, rgb(255, 255, 255));
     let mut text: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
     let count = text.len() - 1;
     let mut rect = rect;
@@ -917,10 +972,39 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
                 left: padding,
                 top: padding,
                 right: width - padding,
-                bottom: (top - padding).max(padding),
+                bottom: (top
+                    - padding
+                    - if can_recover(&view) {
+                        (36.0 * scale) as i32
+                    } else {
+                        0
+                    })
+                .max(padding),
             },
             p.font.get(),
         );
+        if can_recover(&view) {
+            let (paste, copy) = recovery_buttons(p.notice.get(), scale);
+            for (rect, label, color) in [
+                (paste, "Paste here", rgb(101, 78, 217)),
+                (copy, "Copy text", rgb(52, 63, 87)),
+            ] {
+                rounded_radius(
+                    pixels,
+                    width,
+                    height,
+                    (
+                        rect.left as f64,
+                        rect.top as f64,
+                        (rect.right - rect.left) as f64,
+                        (rect.bottom - rect.top) as f64,
+                    ),
+                    color,
+                    8.0 * scale,
+                );
+                text(dc, label, rect, p.small.get(), rgb(255, 255, 255), true);
+            }
+        }
     }
     let _ = GdiFlush();
     let reveal = if let Some(started) = p.transition.get() {
@@ -932,8 +1016,23 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     } else {
         1.0
     };
-    for (pixel, mask) in pixels.iter_mut().zip(memory.iter()) {
-        composite(pixel, ink, (mask & 255) as f64 / 255.0 * reveal);
+    let buttons = (expanded && can_recover(&view)).then(|| recovery_buttons(p.notice.get(), scale));
+    for (index, (pixel, mask)) in pixels.iter_mut().zip(memory.iter()).enumerate() {
+        if mask & 255 == 0 {
+            continue;
+        }
+        let color = if buttons.is_some_and(|(a, b)| {
+            let x = index as i32 % width;
+            let y = index as i32 / width;
+            [a, b]
+                .iter()
+                .any(|r| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
+        }) {
+            rgb(255, 255, 255)
+        } else {
+            ink
+        };
+        composite(pixel, color, (mask & 255) as f64 / 255.0 * reveal);
     }
     memory.copy_from_slice(pixels);
     let _ = GdiFlush();
@@ -973,7 +1072,14 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
             let directory = std::path::PathBuf::from(directory);
             let _ = std::fs::create_dir_all(&directory);
             let data: Vec<u8> = pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
-            let _ = std::fs::write(directory.join(format!("bar-{width}x{height}.bgra")), data);
+            let _ = std::fs::write(directory.join(format!("bar-{width}x{height}.bgra")), &data);
+            let _ = std::fs::write(
+                directory.join(format!(
+                    "{}-{}-bar-{width}x{height}.bgra",
+                    view.theme, view.phase
+                )),
+                data,
+            );
         }
     }
     let _ = EndPaint(hwnd, &ps);
@@ -1125,6 +1231,10 @@ unsafe extern "system" fn procedure(
             let scale = p.dpi.get() as f64 / 96.0;
             let pill = p.pill.get();
             let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
+            if let Some(action) = recovery_action(&view, p.notice.get(), scale, x, y) {
+                let _ = p.tx.send(action);
+                return LRESULT(0);
+            }
             let cancel = in_pill
                 && view.phase != "idle"
                 && if side {
@@ -1164,6 +1274,105 @@ unsafe extern "system" fn procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Shows owned light/dark recovery cards and checks their native button messages; no microphone, paste, clipboard writes or network."]
+    fn native_overlay_recovery_controls() {
+        let before = unsafe { GetForegroundWindow() };
+        let (tx, rx) = mpsc::channel();
+        start(tx).unwrap();
+        let hwnd = HWND(BRIDGE.get().unwrap().hwnd.load(Ordering::Relaxed) as *mut _);
+        let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64 / 96.0;
+        for theme in ["light", "dark"] {
+            configure(&Settings {
+                theme: theme.into(),
+                ..Settings::default()
+            });
+            update(&View {
+                phase: "error".into(),
+                message: "Your text is safe".into(),
+                warning:
+                    "Focus the field you want, then paste here. You can also copy your transcript."
+                        .into(),
+                recoverable: true,
+                last_text: "Public native recovery fixture".into(),
+                ..View::default()
+            });
+            unsafe {
+                SendMessageW(hwnd, UPDATE, None, None);
+            }
+            std::thread::sleep(Duration::from_millis(280));
+            let mut client = RECT::default();
+            unsafe {
+                GetClientRect(hwnd, &mut client).unwrap();
+                SendMessageW(hwnd, WM_PAINT, None, None);
+            }
+            let card = RECT {
+                bottom: client.bottom - (32.0 * scale) as i32,
+                ..client
+            };
+            let (paste, copy) = recovery_buttons(card, scale);
+            for (rect, expected) in [(paste, Action::Paste), (copy, Action::Copy)] {
+                let x = (rect.left + rect.right) / 2;
+                let y = (rect.top + rect.bottom) / 2;
+                unsafe {
+                    SendMessageW(
+                        hwnd,
+                        WM_LBUTTONUP,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(((y as isize) << 16) | x as isize)),
+                    );
+                }
+                assert_eq!(
+                    rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    unsafe { GetForegroundWindow() },
+                    before,
+                    "Recovery stole focus"
+                );
+            }
+        }
+        update(&View {
+            phase: "idle".into(),
+            ..View::default()
+        });
+    }
+    #[test]
+    fn recovery_buttons_are_explicit_and_never_apply_a_pending_preview() {
+        let mut view = OverlayView {
+            phase: "error".into(),
+            recoverable: true,
+            ..Default::default()
+        };
+        let card = RECT {
+            left: 0,
+            top: 0,
+            right: 340,
+            bottom: 130,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let scaled = RECT {
+                right: (340.0 * scale) as i32,
+                bottom: (130.0 * scale) as i32,
+                ..card
+            };
+            let (paste, copy) = recovery_buttons(scaled, scale);
+            assert!(paste.right < copy.left && paste.top >= 0 && copy.bottom < scaled.bottom);
+            assert_eq!(
+                recovery_action(&view, scaled, scale, paste.left + 1, paste.top + 1),
+                Some(Action::Paste)
+            );
+            assert_eq!(
+                recovery_action(&view, scaled, scale, copy.left + 1, copy.top + 1),
+                Some(Action::Copy)
+            );
+        }
+        view.phase = "preview".into();
+        assert_eq!(recovery_action(&view, card, 1.0, 20, 100), None);
+        view.phase = "listening".into();
+        assert_eq!(recovery_action(&view, card, 1.0, 20, 100), None);
+    }
     #[test]
     fn timer_precedes_centered_wave_and_cancel_at_every_size() {
         assert_eq!(timer_alignment(true), DT_CENTER);
