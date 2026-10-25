@@ -1,7 +1,7 @@
 {
   "version": "0.5.3",
   "policy": "fresh focused editable field within anchored window/process, unchanged real input",
-  "rustTestsPassed": 119,
+  "rustTestsPassed": 120,
   "defaultIgnoredTests": 21,
   "frontendTestsPassed": 10,
   "formatTypeBuildClippy": "passed",
@@ -11,5 +11,6 @@
   "computerUse": "not used; user requested code/build/tests only",
   "liveFocusedDelivery": "not performed; acceptance remains unverified",
   "publicRelease": false,
-  "subagents": "none"
+  "subagents": "none",
+  "repeatedShortcutProtection": "passed: processing/stopping shortcuts finish the existing transcript; Escape remains cancellation"
 }

@@ -128,6 +128,10 @@ pub fn native_outcome<T>(result: &Result<T, String>) -> &'static str {
 pub fn aborts_processing(action: Action) -> bool {
     action == Action::Cancel
 }
+pub fn finish_current_before_recording(phase: &str, stopping: bool, action: Action) -> bool {
+    (phase == "processing" || stopping)
+        && matches!(action, Action::Push | Action::HandsFree | Action::Command)
+}
 pub fn blocks_delivery(action: Action) -> bool {
     matches!(
         action,
@@ -223,6 +227,21 @@ impl PushGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_record_shortcuts_cannot_discard_inflight_transcripts() {
+        for action in [Action::Push, Action::HandsFree, Action::Command] {
+            assert!(finish_current_before_recording("processing", false, action));
+            assert!(finish_current_before_recording("listening", true, action));
+            assert!(!finish_current_before_recording("idle", false, action));
+            assert!(!finish_current_before_recording("listening", false, action));
+            assert!(!finish_current_before_recording("preview", false, action));
+        }
+        assert!(!finish_current_before_recording(
+            "processing",
+            true,
+            Action::Cancel
+        ));
+    }
     #[test]
     fn an_old_error_timer_cannot_hide_a_new_copy_or_paste_status() {
         let clock = VisibilityClock::default();

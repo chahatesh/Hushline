@@ -2,6 +2,7 @@
 
 ## 0.5.3 — unreleased
 
+- Repeated recording shortcuts while audio is finishing or text is processing no longer cancel and discard the in-flight transcript. Finish the existing delivery first; Escape remains explicit cancellation.
 - Ordinary dictation now inspects the focused editable field at delivery inside the original window/process. Failed early inspection, missing provider runtime IDs, and app-managed field replacement no longer automatically discard paste authority. Actual typing/clicking, window changes, cancellation, protected fields and terminals remain guarded.
 - Keep window/process/input authority through recording, transcription and delivery. Skip unnecessary early UIA for normal dictation; optional context uses its own bounded slot and cannot occupy delivery slots. Read-only inspection retries happen before clipboard ownership, never after a paste/edit dispatch.
 - Retain strict original-selection checks for Command Mode, approved previews and saved-audio recovery. Preserve snippet confirmation with an on-demand strict field snapshot. Allow scrolling without cancelling delivery, and give held modifiers up to three seconds to release within the existing delivery deadline.

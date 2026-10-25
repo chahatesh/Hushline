@@ -1424,6 +1424,18 @@ async fn actor(
                 }
             }
             Message::Action(action @ (Action::Push | Action::HandsFree | Action::Command)) => {
+                let phase = state.view.lock().unwrap().phase.clone();
+                if lifecycle::finish_current_before_recording(
+                    &phase,
+                    session.as_ref().is_some_and(|s| s.stopping),
+                    action,
+                ) {
+                    deferred_push.clear();
+                    publish(&app, &state, |v| {
+                        v.warning = "Finishing your text. Release the shortcut to paste.".into();
+                    });
+                    continue;
+                }
                 // Modifier-only Push is a prefix of several more-specific chords.
                 // Let that chord settle before restarting inference or stopping
                 // hands-free recording, preserving Copy/Open during processing.
@@ -1454,11 +1466,6 @@ async fn actor(
                         startup_abandoned(&app, &state, s.id);
                     }
                     continue;
-                }
-                if session.as_ref().is_some_and(|s| s.stopping) {
-                    if let Some(s) = session.take() {
-                        cancel_capture(&s);
-                    }
                 }
                 if let Some(s) = session.as_mut() {
                     match action {
