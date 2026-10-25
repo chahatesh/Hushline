@@ -10,6 +10,14 @@ Repeated recording shortcuts during stopping/processing no longer reset the job 
 
 This update follows the user's code-only constraint: no Computer Use, foreground browser interaction, or live microphone-to-cloud test is performed. Executed code/build checks and remaining live acceptance are recorded in versioned reports. A public Release remains gated by the incomplete live acceptance protocol.
 
+### 0.5.3 executed verification — 2026-10-25
+
+Final source `bec746e` passed **120 Rust tests**, **10 frontend tests**, formatting, strict Clippy, lint, type checking and the production build. Twenty-one interactive/device/provider tests remain explicitly ignored in the ordinary Rust suite. The new regressions cover failed/slow initial target inspection, retained delivery anchors, changed window/process/input, cancellation, strict command-selection capture, legacy history compatibility, and repeated recording shortcuts during stopping/processing. These code checks do not establish live app compatibility.
+
+Hosted Windows CI passed frontend/browser/Rust checks, the real offline CPU speech fixture, NSIS packaging and portable artifact upload: [run](https://github.com/chahatesh/Hushline/actions/runs/40237114418), [saved step results](verification/ci-0.5.3.json). The final local optimized executable, installer and portable ZIP were generated; [sizes and SHA-256 checksums](verification/artifacts-0.5.3.json). Silent per-user installation, background launch, bundled dependency notices, clean uninstall, profile retention and preservation of unrelated legacy Hush registration/shortcuts passed; [installer results](verification/installer-test-0.5.3.json). The interactive installer wizard and in-place upgrade remain unverified.
+
+[Component evidence](verification/update-0.5.3.json) distinguishes these automated results from the unperformed live microphone-to-Groq-to-field and prompt acceptance. No local desktop interaction, Computer Use or subagents were used. The public Release verifier rejects the incomplete live acceptance report as expected; no Release or tag was created.
+
 ## 0.5.2 field-reflow paste failure
 
 The old code compared caret rectangles captured before recording with their coordinates after transcription. A real owned Chrome textarea reproduced the failure: after capture, changing its margin and height caused insertion to fail with “The field changed before insertion” even though the same field remained focused and no user input occurred. The unit regression failed too. No private transcript or microphone audio is used by these fixtures.

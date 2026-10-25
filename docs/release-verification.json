@@ -2,10 +2,10 @@
   "version": "0.5.3",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
-  "testedAt": "2026-10-25T21:30:56.2415853Z",
-  "evidence": "0.5.3 binds ordinary dictation to a freshly inspected editable field in the original window/process with unchanged real input. Initial UIA failures no longer block delivery. Code-only update; new live focused-field acceptance remains unverified. No public Release.",
+  "testedAt": "2026-10-25T22:53:14.3168080Z",
+  "evidence": "0.5.3 source bec746e: local and hosted automated checks and silent per-user install/background launch/uninstall passed. Fresh focused delivery and repeated-shortcut protections have code regressions. No Computer Use or live microphone-to-cloud-to-target acceptance was performed under the code-only constraint. Other manual checks remain unverified; no public Release.",
   "checks": {
-    "installLaunch": false,
+    "installLaunch": true,
     "saveKey": false,
     "selectMicrophone": false,
     "pushToTalkNotepad": false,

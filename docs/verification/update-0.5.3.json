@@ -12,5 +12,11 @@
   "liveFocusedDelivery": "not performed; acceptance remains unverified",
   "publicRelease": false,
   "subagents": "none",
-  "repeatedShortcutProtection": "passed: processing/stopping shortcuts finish the existing transcript; Escape remains cancellation"
+  "repeatedShortcutProtection": "passed: processing/stopping shortcuts finish the existing transcript; Escape remains cancellation",
+  "sourceCommit": "bec746e8284941278e3919b16963ef762ae128dc",
+  "hostedCI": "https://github.com/chahatesh/Hushline/actions/runs/40237114418",
+  "hostedWindowsChecks": "passed: frontend/browser/Rust checks, real offline CPU speech fixture, installer and portable packaging",
+  "localInstaller": "passed: per-user install, background launch, licenses, clean uninstall, retained profile and unrelated legacy registration/shortcuts",
+  "optimizedBuild": "passed: executable, NSIS installer and portable ZIP generated from final source",
+  "appReopened": "passed: final workspace executable reports 0.5.3 and Ready"
 }
