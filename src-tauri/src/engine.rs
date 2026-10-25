@@ -37,6 +37,7 @@ pub struct AppState {
     recovery: Recovery,
     delivery_cancel: Mutex<CancellationToken>,
     native_slots: Arc<Semaphore>,
+    context_slots: Arc<Semaphore>,
     diagnostics: Diagnostics,
     visibility: lifecycle::VisibilityClock,
 }
@@ -73,6 +74,7 @@ struct Session {
     arm_elapsed: bool,
     settings: Settings,
     target: Option<oneshot::Receiver<Result<Target, String>>>,
+    origin: Option<native::FocusAnchor>,
     hands_free: bool,
     command: bool,
     test: bool,
@@ -83,12 +85,22 @@ struct Completed {
     recovery_id: Option<String>,
     text: String,
     target: Result<Target, String>,
+    origin: Option<native::FocusAnchor>,
     preview: bool,
     original: Option<String>,
     duration: u64,
     latency: u64,
     settings: Settings,
     warning: String,
+}
+impl Completed {
+    fn delivery_origin(&self, blocked: bool) -> Option<&native::FocusAnchor> {
+        if blocked || self.preview || self.recovery_id.is_some() {
+            None
+        } else {
+            self.origin.as_ref()
+        }
+    }
 }
 #[derive(Clone)]
 enum PreviewTarget {
@@ -113,6 +125,7 @@ struct Job {
     id: u64,
     settings: Settings,
     target: Option<oneshot::Receiver<Result<Target, String>>>,
+    origin: Option<native::FocusAnchor>,
     command: bool,
     recovery_id: Option<String>,
 }
@@ -122,6 +135,7 @@ impl From<Session> for Job {
             id: s.id,
             settings: s.settings,
             target: s.target,
+            origin: s.origin,
             command: s.command,
             recovery_id: None,
         }
@@ -263,7 +277,12 @@ fn target_async(
     let (tx, rx) = oneshot::channel();
     let token = state.cancel.lock().unwrap().clone();
     tauri::async_runtime::spawn(async move {
-        let result = native_work(&state, Duration::from_millis(2500), &token, move |child| {
+        let slots = if selection {
+            state.native_slots.clone()
+        } else {
+            state.context_slots.clone()
+        };
+        let result = bounded_native(slots, Duration::from_millis(2500), &token, move |child| {
             let target = native::capture_target(selection)?;
             if child.is_cancelled() {
                 return Err("Cancelled".into());
@@ -303,6 +322,19 @@ async fn resolve_target(
         result = tokio::time::timeout(Duration::from_millis(2550), target) => result.map_err(|_| "The original field inspection timed out. Your transcript is ready to copy.".to_string())?.map_err(|_| "The original field is unavailable. Your transcript is ready to copy.".to_string())?,
     }
 }
+async fn resolve_job_target(job: &mut Job, cancel: &CancellationToken) -> Result<Target, String> {
+    if !job.command && job.origin.is_some() {
+        if cancel.is_cancelled() {
+            return Err("Cancelled".into());
+        }
+        // Early UIA is optional context for dictation, never its delivery
+        // authority. A fresh protected-field inspection happens at paste time.
+        return job.target.take().and_then(|mut rx| rx.try_recv().ok()).unwrap_or_else(|| {
+            Err("Early field context unavailable; the focused field will be checked at delivery.".into())
+        });
+    }
+    resolve_target(job.target.take(), cancel).await
+}
 fn begin(
     app: &tauri::AppHandle,
     state: &Arc<AppState>,
@@ -312,8 +344,11 @@ fn begin(
     test: bool,
 ) -> Session {
     let settings = state.settings.read().unwrap().clone();
-    let epoch = native::input_epoch();
-    let target = if test {
+    let origin = native::capture_focus_anchor();
+    let epoch = origin
+        .as_ref()
+        .map_or_else(native::input_epoch, |a| a.epoch);
+    let target = if test || (!command && !settings.context_enabled) {
         None
     } else {
         Some(target_async(
@@ -358,6 +393,7 @@ fn begin(
         arm_elapsed: false,
         settings,
         target,
+        origin,
         hands_free,
         command,
         test,
@@ -469,7 +505,7 @@ async fn process(
     if spoken.trim().is_empty() {
         return Err("No speech was returned. Nothing was inserted.".into());
     }
-    let target = resolve_target(session.target.take(), &cancel).await;
+    let mut target = resolve_job_target(&mut session, &cancel).await;
     let cleaned = text::cleanup(
         &spoken,
         &local_mode,
@@ -576,10 +612,26 @@ async fn process(
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
+    if preview && target.is_err() && !session.command {
+        if let Some(origin) = session.origin.clone() {
+            target = native_work(&state, Duration::from_millis(2500), &cancel, move |child| {
+                native::capture_target_for_anchor(&origin, &child)
+            })
+            .await;
+        }
+    }
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
     Ok(Completed {
         recovery_id: session.recovery_id,
         text: output,
         target,
+        origin: if session.command {
+            None
+        } else {
+            session.origin
+        },
         preview,
         original,
         duration: recording.duration_ms,
@@ -606,6 +658,81 @@ fn polish_or_local(local: &str, candidate: Result<String, String>) -> (String, b
 #[cfg(test)]
 mod capture_quality_tests {
     use super::*;
+    #[tokio::test]
+    async fn recording_handoff_keeps_delivery_authority_when_initial_inspection_fails() {
+        let origin = native::FocusAnchor {
+            hwnd: 42,
+            pid: 123,
+            epoch: 7,
+        };
+        let mut session = test_session(ready_target(Err("Provider not ready".into())));
+        session.origin = Some(origin.clone());
+        let mut job = Job::from(session);
+        let target = resolve_job_target(&mut job, &CancellationToken::new()).await;
+        assert!(target.is_err());
+        let mut completed = Completed {
+            recovery_id: None,
+            text: "Public complete transcript".into(),
+            target,
+            origin: job.origin,
+            preview: false,
+            original: None,
+            duration: 1000,
+            latency: 50,
+            settings: job.settings,
+            warning: String::new(),
+        };
+        assert_eq!(completed.delivery_origin(false), Some(&origin));
+        assert!(completed.delivery_origin(true).is_none());
+        completed.preview = true;
+        assert!(completed.delivery_origin(false).is_none());
+        completed.preview = false;
+        completed.recovery_id = Some("saved audio".into());
+        assert!(completed.delivery_origin(false).is_none());
+    }
+    #[tokio::test]
+    async fn slow_early_context_does_not_delay_dictation_delivery() {
+        let (_sender, receiver) = oneshot::channel();
+        let mut session = test_session(receiver);
+        session.origin = Some(native::FocusAnchor {
+            hwnd: 42,
+            pid: 123,
+            epoch: 7,
+        });
+        let mut job = Job::from(session);
+        let result = tokio::time::timeout(
+            Duration::from_millis(20),
+            resolve_job_target(&mut job, &CancellationToken::new()),
+        )
+        .await;
+        assert!(result.unwrap().is_err());
+        assert!(job.origin.is_some());
+    }
+    #[tokio::test]
+    async fn command_mode_still_waits_for_its_authorized_selection() {
+        let (sender, receiver) = oneshot::channel();
+        let mut session = test_session(receiver);
+        session.command = true;
+        session.origin = Some(native::FocusAnchor {
+            hwnd: 42,
+            pid: 123,
+            epoch: 7,
+        });
+        let mut job = Job::from(session);
+        let producer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            sender
+                .send(Err("Selected text unavailable".into()))
+                .unwrap();
+        });
+        assert_eq!(
+            resolve_job_target(&mut job, &CancellationToken::new())
+                .await
+                .unwrap_err(),
+            "Selected text unavailable"
+        );
+        producer.await.unwrap();
+    }
     #[test]
     fn ai_cleanup_failure_keeps_deliverable_local_text() {
         let local = "Send 4 widgets to Maya at https://example.com/qa using useState.";
@@ -639,6 +766,7 @@ mod capture_quality_tests {
             arm_elapsed: false,
             settings: Settings::default(),
             target: Some(target),
+            origin: None,
             hands_free: false,
             command: false,
             test: false,
@@ -840,12 +968,21 @@ fn finish_completed(
             app: done
                 .target
                 .as_ref()
+                .ok()
                 .map(|t| t.app.clone())
+                .or_else(|| done.origin.as_ref().and_then(native::app_for_anchor))
                 .unwrap_or_default(),
             words: done.text.split_whitespace().count() as u32,
             duration_ms: done.duration,
             latency_ms: done.latency,
             inserted,
+            delivery_failure: if inserted || done.preview {
+                None
+            } else if done.recovery_id.is_some() {
+                Some("manual_recovery".into())
+            } else {
+                Some(lifecycle::native_outcome::<()>(&Err(warning.clone())).into())
+            },
         };
         if let Err(e) = state.store.insert(&record) {
             warning = format!("Transcript ready; history could not be saved: {e}");
@@ -1065,7 +1202,7 @@ async fn actor(
                     .await;
                     match recording {
                         Ok(Ok(recording)) if !token.is_cancelled() => {
-                            let job=Job { id,settings,target:Some(ready_target(Err("Recovered recording: review and copy the transcript. Automatic paste is disabled.".into()))),command:false,recovery_id:Some(clip_id) };
+                            let job=Job { id,settings,target:Some(ready_target(Err("Recovered recording: review and copy the transcript. Automatic paste is disabled.".into()))),origin:None,command:false,recovery_id:Some(clip_id) };
                             spawn_process(st, job, recording, token);
                         }
                         Ok(Err(e)) => {
@@ -1127,6 +1264,7 @@ async fn actor(
                                 processing(&app, &state, "inserting", "Pasting saved text");
                             }
                             let id = generation;
+                            let origin = native::capture_focus_anchor();
                             let operation = feedback.begin(id, standalone);
                             let st = state.clone();
                             delivery = cancellation.child_token();
@@ -1139,9 +1277,11 @@ async fn actor(
                                     Duration::from_secs(5),
                                     &token,
                                     move |child| {
-                                        let target = native::capture_target(false)?;
-                                        native::insert_with_notice(
-                                            &target, &text, &method, false, &child, notice,
+                                        let origin = origin.ok_or(
+                                            "No active application. Your text is preserved.",
+                                        )?;
+                                        native::insert_focused_with_notice(
+                                            &origin, &text, &method, &child, notice,
                                         )
                                     },
                                 )
@@ -1671,15 +1811,18 @@ async fn actor(
                             done.target=Err("Automatic paste was skipped because you opened Hush or used another action. Your transcript is ready to copy.".into());
                             done.preview = false;
                         }
+                        let origin = done.delivery_origin(delivery_blocked).cloned();
                         if let Err(reason) = &done.target {
-                            done.preview = false;
-                            let warning = [done.warning.as_str(), reason.as_str()]
-                                .into_iter()
-                                .filter(|v| !v.is_empty())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            pending = finish_completed(&app, &state, id, done, false, warning);
-                            continue;
+                            if origin.is_none() {
+                                done.preview = false;
+                                let warning = [done.warning.as_str(), reason.as_str()]
+                                    .into_iter()
+                                    .filter(|v| !v.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                pending = finish_completed(&app, &state, id, done, false, warning);
+                                continue;
+                            }
                         }
                         if done.preview {
                             let warning = done.warning.clone();
@@ -1699,9 +1842,15 @@ async fn actor(
                                     Duration::from_secs(5),
                                     &token,
                                     move |child| {
-                                        native::insert_with_notice(
-                                            &target?, &text, &method, false, &child, notice,
-                                        )
+                                        if let Some(origin) = origin {
+                                            native::insert_focused_with_notice(
+                                                &origin, &text, &method, &child, notice,
+                                            )
+                                        } else {
+                                            native::insert_with_notice(
+                                                &target?, &text, &method, false, &child, notice,
+                                            )
+                                        }
                                     },
                                 )
                                 .await;
@@ -2230,6 +2379,7 @@ pub fn run() {
                 recovery: Recovery::default(),
                 delivery_cancel: Mutex::new(CancellationToken::new()),
                 native_slots: Arc::new(Semaphore::new(2)),
+                context_slots: Arc::new(Semaphore::new(1)),
                 diagnostics: Diagnostics::default(),
                 visibility: lifecycle::VisibilityClock::default(),
             });

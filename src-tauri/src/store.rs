@@ -228,6 +228,7 @@ mod tests {
                 duration_ms: 100,
                 latency_ms: 20,
                 inserted: true,
+                delivery_failure: None,
             };
             s.insert(&t).unwrap();
             assert_eq!(s.history().unwrap().len(), 1);

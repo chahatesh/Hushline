@@ -25,6 +25,14 @@ pub use overlay::{
 pub use windows::*;
 pub const INPUT_TAG: usize = 0x48555348;
 
+/// Cheap, content-free authority for ordinary dictation into the original window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusAnchor {
+    pub hwnd: isize,
+    pub pid: u32,
+    pub epoch: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Target {
     pub hwnd: isize,

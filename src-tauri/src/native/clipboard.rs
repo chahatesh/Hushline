@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Bounded clipboard preservation, including native images. Unknown handle types
 //! cause a refusal before mutation, never a destructive best-effort snapshot.
-use super::{capture_target, input_epoch, Target};
+use super::{capture_target, input_epoch, FocusAnchor, Target};
 use std::{
     mem::size_of,
     sync::atomic::{AtomicUsize, Ordering},
@@ -270,6 +270,15 @@ struct PendingRestore {
     sequence: u32,
     delivered: bool,
 }
+#[derive(Clone)]
+enum Destination {
+    Original(Target, bool),
+    Focused(FocusAnchor),
+}
+enum Prepared {
+    Clipboard(PendingRestore),
+    NativeEdit,
+}
 pub fn paste_text(
     target: &Target,
     text: &str,
@@ -277,10 +286,30 @@ pub fn paste_text(
     cancel: &tokio_util::sync::CancellationToken,
     notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
+    paste(
+        Destination::Original(target.clone(), explicit),
+        text,
+        cancel,
+        notice,
+    )
+}
+pub(super) fn paste_focused(
+    anchor: &FocusAnchor,
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
+    paste(Destination::Focused(anchor.clone()), text, cancel, notice)
+}
+fn paste(
+    destination: Destination,
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
     let permit = WorkerPermit::acquire(&PASTE_WORKERS).ok_or(
         "Windows clipboard editing is still busy. Your text is preserved; try again after the field responds.",
     )?;
-    let target = target.clone();
     let text = text.to_string();
     let token = cancel.child_token();
     let worker_token = token.clone();
@@ -292,11 +321,17 @@ pub fn paste_text(
             // stalled. Hold the permit until this actual worker and delayed
             // restoration finish, not just until the caller stops waiting.
             let _permit = permit;
-            match prepare_paste(&target, &text, explicit, &worker_token) {
+            match prepare_paste(&destination, &text, &worker_token) {
                 Err(error) => {
                     let _ = tx.send(Err(error));
                 }
-                Ok(pending) => {
+                Ok(Prepared::NativeEdit) => {
+                    let _ = tx.send(Ok(String::new()));
+                    if let Some(notice) = notice {
+                        notice(String::new());
+                    }
+                }
+                Ok(Prepared::Clipboard(pending)) => {
                     let _ = tx.send(if pending.delivered {
                         Ok(String::new())
                     } else {
@@ -322,28 +357,51 @@ pub fn paste_text(
     }
 }
 fn prepare_paste(
-    target: &Target,
+    destination: &Destination,
     text: &str,
-    explicit: bool,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<PendingRestore> {
+) -> Result<Prepared> {
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
     // A slow/out-of-process accessibility provider must never hold or replace
     // the user's clipboard while it is being inspected.
-    let current = capture_target(!target.selected.is_empty())?;
-    if !super::windows::target_matches(target, &current, explicit) {
-        return Err("The field changed before insertion. Your text is ready to copy.".into());
+    let current = match destination {
+        Destination::Original(target, explicit) => {
+            let current = capture_target(!target.selected.is_empty())?;
+            if !super::windows::target_matches(target, &current, *explicit) {
+                return Err(
+                    "The field changed before insertion. Your text is ready to copy.".into(),
+                );
+            }
+            current
+        }
+        Destination::Focused(anchor) => inspect_focused_for_delivery(anchor, cancel)?,
+    };
+    if current.terminal {
+        return Err("Automatic insertion into terminals is disabled to avoid executing commands. Your text is preserved.".into());
     }
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
+    }
+    if matches!(destination, Destination::Focused(_)) {
+        if let Some(selection) = &current.native_edit {
+            super::edit::insert(&current, selection, text, cancel)?;
+            return Ok(Prepared::NativeEdit);
+        }
     }
     let owner = Owner::new()?;
     let lock = open(owner.0)?;
     let saved = unsafe { snapshot()? };
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
+    }
+    if let Destination::Focused(anchor) = destination {
+        super::windows::check_focus_anchor(anchor, cancel)?;
+    }
+    if current.epoch != input_epoch() || unsafe { GetForegroundWindow() }.0 as isize != current.hwnd
+    {
+        return Err("The active field changed before paste. Your text is preserved.".into());
     }
     unsafe {
         EmptyClipboard().map_err(|_| "Clipboard could not be prepared.")?;
@@ -360,7 +418,10 @@ fn prepare_paste(
     // Only fast checks remain once the clipboard is prepared. Recheck the epoch
     // even for an explicitly approved preview: input after inspection revokes
     // that approval for this field. Never paste a newer user copy by accident.
-    let valid = input_epoch() == current.epoch
+    let valid = match destination {
+        Destination::Focused(anchor) => super::windows::check_focus_anchor(anchor, cancel).is_ok(),
+        Destination::Original(_, _) => true,
+    } && input_epoch() == current.epoch
         && unsafe { GetForegroundWindow() }.0 as isize == current.hwnd
         && publication_matches(
             owner.0,
@@ -393,12 +454,30 @@ fn prepare_paste(
         ];
         delivered = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) } == 4;
     }
-    Ok(PendingRestore {
+    Ok(Prepared::Clipboard(PendingRestore {
         owner,
         saved,
         sequence,
         delivered,
-    })
+    }))
+}
+fn inspect_focused_for_delivery(
+    anchor: &FocusAnchor,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<Target> {
+    // Retry only read-only inspection. Never retry an edit or dispatched paste.
+    for attempt in 0..3 {
+        super::windows::check_focus_anchor(anchor, cancel)?;
+        match super::windows::capture_focused_target() {
+            Ok(current) => {
+                super::windows::check_focus_anchor(anchor, cancel)?;
+                return Ok(current);
+            }
+            Err(error) if attempt == 2 => return Err(error),
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    unreachable!()
 }
 fn restore_later(pending: PendingRestore) -> String {
     let PendingRestore {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 — unreleased
+
+- Ordinary dictation now inspects the focused editable field at delivery inside the original window/process. Failed early inspection, missing provider runtime IDs, and app-managed field replacement no longer automatically discard paste authority. Actual typing/clicking, window changes, cancellation, protected fields and terminals remain guarded.
+- Keep window/process/input authority through recording, transcription and delivery. Skip unnecessary early UIA for normal dictation; optional context uses its own bounded slot and cannot occupy delivery slots. Read-only inspection retries happen before clipboard ownership, never after a paste/edit dispatch.
+- Retain strict original-selection checks for Command Mode, approved previews and saved-audio recovery. Preserve snippet confirmation with an on-demand strict field snapshot. Allow scrolling without cancelling delivery, and give held modifiers up to three seconds to release within the existing delivery deadline.
+- Store a fixed failure code alongside failed history rows when history is enabled. Old rows remain compatible; no field contents, provider error payloads or keys are added to diagnostics.
+- Add code-only regressions for failed/slow early inspection, the recording-to-delivery handoff, window/process/input guards, command selection waiting and history compatibility. No Computer Use tools are used for this update.
+
 ## 0.5.2 — unreleased
 
 - Fix a reproduced browser paste failure when the focused text box grows or moves during dictation. Ordinary dictation now validates the same field, a collapsed selection and the real input generation rather than requiring identical screen coordinates.

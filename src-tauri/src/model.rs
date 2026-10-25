@@ -277,6 +277,9 @@ pub struct Transcript {
     pub duration_ms: u64,
     pub latency_ms: u64,
     pub inserted: bool,
+    /// Fixed diagnostic code only; never a provider payload or field contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_failure: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,6 +337,16 @@ pub struct StageDiagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_history_without_delivery_metadata_still_loads() {
+        let old = serde_json::json!({"id":"public", "text":"Public fixture", "createdAt":"2026", "app":"fixture", "words":2, "durationMs":100, "latencyMs":20, "inserted":false});
+        let record: Transcript = serde_json::from_value(old).unwrap();
+        assert!(record.delivery_failure.is_none());
+        assert!(serde_json::to_value(record)
+            .unwrap()
+            .get("deliveryFailure")
+            .is_none());
+    }
     #[test]
     fn style_upgrade_preserves_every_explicit_v4_preference() {
         for (mode, style) in [

@@ -1,0 +1,15 @@
+{
+  "version": "0.5.3",
+  "policy": "fresh focused editable field within anchored window/process, unchanged real input",
+  "rustTestsPassed": 119,
+  "defaultIgnoredTests": 21,
+  "frontendTestsPassed": 10,
+  "formatTypeBuildClippy": "passed",
+  "recordingHandoff": "passed: failed/slow early inspection retains delivery anchor; ordinary context never blocks the transcript",
+  "safety": "passed code regressions: changed window/process/input, cancellation, command selection waiting and preview/recovery exclusions",
+  "historyCompatibility": "passed: old rows without deliveryFailure load unchanged",
+  "computerUse": "not used; user requested code/build/tests only",
+  "liveFocusedDelivery": "not performed; acceptance remains unverified",
+  "publicRelease": false,
+  "subagents": "none"
+}

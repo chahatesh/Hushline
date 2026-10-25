@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Fail-closed inspection and insertion. No screenshots, window titles or surrounding text.
-use super::{input_epoch, Target, WholeFieldSnapshot};
+use super::{input_epoch, FocusAnchor, Target, WholeFieldSnapshot};
 use std::{mem::size_of, ptr};
 use windows::{
     core::{w, PCWSTR, PWSTR},
@@ -90,11 +90,64 @@ fn array_f64(array: *mut SAFEARRAY) -> Vec<i64> {
 pub fn capture_target(read_selection: bool) -> Result<Target> {
     let _com = Com::new()?;
     let uia = automation()?;
-    inspect_focused(&uia, read_selection).map(|(target, _)| target)
+    inspect_focused(&uia, read_selection, true).map(|(target, _)| target)
+}
+pub(super) fn capture_focused_target() -> Result<Target> {
+    let _com = Com::new()?;
+    let uia = automation()?;
+    inspect_focused(&uia, false, false).map(|(target, _)| target)
+}
+pub fn capture_focus_anchor() -> Option<FocusAnchor> {
+    let epoch = input_epoch();
+    unsafe {
+        let window = GetForegroundWindow();
+        let mut pid = 0;
+        GetWindowThreadProcessId(window, Some(&mut pid));
+        if window.0.is_null()
+            || pid == 0
+            || input_epoch() != epoch
+            || GetForegroundWindow() != window
+        {
+            return None;
+        }
+        Some(FocusAnchor {
+            hwnd: window.0 as isize,
+            pid,
+            epoch,
+        })
+    }
+}
+pub fn app_for_anchor(anchor: &FocusAnchor) -> Option<String> {
+    process_name(anchor.pid)
+}
+pub fn capture_target_for_anchor(
+    anchor: &FocusAnchor,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<Target> {
+    check_focus_anchor(anchor, cancel)?;
+    let target = capture_target(false)?;
+    check_focus_anchor(anchor, cancel)?;
+    Ok(target)
+}
+fn anchor_matches(expected: &FocusAnchor, current: &FocusAnchor) -> bool {
+    expected.hwnd != 0 && expected.pid != 0 && expected == current
+}
+pub(super) fn check_focus_anchor(
+    anchor: &FocusAnchor,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Err("Cancelled".into());
+    }
+    if !capture_focus_anchor().is_some_and(|current| anchor_matches(anchor, &current)) {
+        return Err("The active window or user input changed. Your text is preserved.".into());
+    }
+    Ok(())
 }
 fn inspect_focused(
     uia: &IUIAutomation,
     read_selection: bool,
+    require_identity: bool,
 ) -> Result<(Target, IUIAutomationElement)> {
     let epoch = input_epoch();
     unsafe {
@@ -154,11 +207,15 @@ fn inspect_focused(
                 "Focus an editable text field. Transcript will be kept for recovery.".into(),
             );
         }
-        let runtime = array_i32(
-            element
-                .GetRuntimeId()
-                .map_err(|_| "Cannot identify this text field.")?,
-        )?;
+        let identity = element
+            .GetRuntimeId()
+            .map_err(|_| "Cannot identify this text field.".to_string())
+            .and_then(array_i32);
+        let runtime = if require_identity {
+            identity?
+        } else {
+            identity.unwrap_or_default()
+        };
         let mut selected = String::new();
         let mut caret = vec![];
         let mut selection_empty = None;
@@ -347,7 +404,7 @@ unsafe fn whole_text(element: &IUIAutomationElement) -> Result<String> {
 pub fn capture_whole_field() -> Result<WholeFieldSnapshot> {
     let _com = Com::new()?;
     let uia = automation()?;
-    let (target, element) = inspect_focused(&uia, false)?;
+    let (target, element) = inspect_focused(&uia, false, true)?;
     if target.terminal {
         return Err("Improve prompt is disabled in terminals. Paste your request into a normal text field first.".into());
     }
@@ -399,7 +456,7 @@ pub fn replace_whole_field_with_notice(
     }
     let _com = Com::new()?;
     let uia = automation()?;
-    let (current, element) = inspect_focused(&uia, false)?;
+    let (current, element) = inspect_focused(&uia, false, true)?;
     let original = unsafe { whole_text(&element)? };
     if !whole_field_matches(snapshot, &current, &original) {
         return Err(
@@ -535,8 +592,61 @@ pub fn insert_with_notice(
     } else if input_epoch() != target.epoch {
         return Err("Focus or cursor changed. Your transcript is ready to copy.".into());
     }
+    wait_for_modifiers(cancel)?;
+    if method == "clipboard" {
+        if target.native_edit.is_some() {
+            let current = capture_target(!target.selected.is_empty())?;
+            if !target_matches(target, &current, authorized_preview) {
+                return Err(
+                    "The field changed before insertion. Your text is ready to copy.".into(),
+                );
+            }
+            if let Some(selection) = &current.native_edit {
+                let result = super::edit::insert(&current, selection, text, cancel);
+                if result.is_ok() {
+                    if let Some(notice) = notice {
+                        notice(String::new());
+                    }
+                }
+                return result;
+            }
+        }
+        return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
+    }
+    let final_check = capture_target(!target.selected.is_empty())?;
+    if !target_matches(target, &final_check, authorized_preview) {
+        return Err("The target changed before insertion. Transcript preserved.".into());
+    }
+    if cancel.is_cancelled()
+        || input_epoch() != final_check.epoch
+        || unsafe { GetForegroundWindow() }.0 as isize != final_check.hwnd
+    {
+        return Err("Cancelled or the field changed. Transcript preserved.".into());
+    }
+    unicode_text(text)?;
+    Ok("Inserted using Windows Unicode input. The receiving application does not provide a delivery receipt.".into())
+}
+pub fn insert_focused_with_notice(
+    anchor: &FocusAnchor,
+    text: &str,
+    method: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
+    check_focus_anchor(anchor, cancel)?;
+    wait_for_modifiers(cancel)?;
+    check_focus_anchor(anchor, cancel)?;
+    if method == "clipboard" {
+        super::clipboard::paste_focused(anchor, text, cancel, notice)
+    } else {
+        let current = capture_focused_target()?;
+        check_focus_anchor(anchor, cancel)?;
+        insert_with_notice(&current, text, method, false, cancel, notice)
+    }
+}
+fn wait_for_modifiers(cancel: &tokio_util::sync::CancellationToken) -> Result<()> {
     // Never send shortcuts while the user's modifiers are physically held.
-    for _ in 0..80 {
+    for _ in 0..300 {
         if cancel.is_cancelled() {
             return Err("Cancelled".into());
         }
@@ -559,39 +669,7 @@ pub fn insert_with_notice(
     if cancel.is_cancelled() {
         return Err("Cancelled".into());
     }
-    if method == "clipboard" {
-        if target.native_edit.is_some() {
-            let current = capture_target(!target.selected.is_empty())?;
-            if !target_matches(target, &current, authorized_preview) {
-                return Err(
-                    "The field changed before insertion. Your text is ready to copy.".into(),
-                );
-            }
-            if let Some(selection) = &current.native_edit {
-                let result = super::edit::insert(&current, selection, text, cancel);
-                if result.is_ok() {
-                    if let Some(notice) = notice {
-                        notice(String::new());
-                    }
-                }
-                return result;
-            }
-        }
-        // The worker inspects the field before touching clipboard contents.
-        return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
-    }
-    let final_check = capture_target(!target.selected.is_empty())?;
-    if !target_matches(target, &final_check, authorized_preview) {
-        return Err("The target changed before insertion. Transcript preserved.".into());
-    }
-    if cancel.is_cancelled()
-        || input_epoch() != final_check.epoch
-        || unsafe { GetForegroundWindow() }.0 as isize != final_check.hwnd
-    {
-        return Err("Cancelled or the field changed. Transcript preserved.".into());
-    }
-    unicode_text(text)?;
-    Ok("Inserted using Windows Unicode input. The receiving application does not provide a delivery receipt.".into())
+    Ok(())
 }
 pub(super) fn target_matches(a: &Target, b: &Target, explicit: bool) -> bool {
     a.hwnd == b.hwnd
@@ -702,6 +780,44 @@ pub fn delete_key() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focused_delivery_stays_in_the_original_window_process_and_input_generation() {
+        let original = FocusAnchor {
+            hwnd: 42,
+            pid: 123,
+            epoch: 7,
+        };
+        assert!(anchor_matches(&original, &original));
+        for changed in [
+            FocusAnchor {
+                hwnd: 43,
+                ..original.clone()
+            },
+            FocusAnchor {
+                pid: 124,
+                ..original.clone()
+            },
+            FocusAnchor {
+                epoch: 8,
+                ..original.clone()
+            },
+        ] {
+            assert!(!anchor_matches(&original, &changed));
+        }
+        let absent = FocusAnchor {
+            hwnd: 0,
+            pid: 0,
+            epoch: 7,
+        };
+        assert!(!anchor_matches(&absent, &absent));
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(
+            insert_focused_with_notice(&original, "Never insert", "clipboard", &cancelled, None)
+                .unwrap_err(),
+            "Cancelled"
+        );
+    }
     #[test]
     fn unicode_multiline_cannot_submit_a_message() {
         assert!(unicode_text("first line\nsecond line").is_err());

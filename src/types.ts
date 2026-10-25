@@ -7,7 +7,7 @@ export interface Settings { preferencesVersion: number; provider: 'groq' | 'offl
 export interface Entry { id: string; source: string; replacement: string }
 export interface Snippet { id: string; trigger: string; content: string; confirm: boolean }
 export interface Style { id: string; name: string; appMatch: string; instruction: string; enhanced: boolean }
-export interface Transcript { id: string; text: string; createdAt: string; app: string; words: number; durationMs: number; latencyMs: number; inserted: boolean }
+export interface Transcript { id: string; text: string; createdAt: string; app: string; words: number; durationMs: number; latencyMs: number; inserted: boolean; deliveryFailure?: string }
 export interface View { phase: string; stage: string; message: string; level: number; seconds: number; lastText: string; recoverable: boolean; preview: string | null; previewKind: string; previewId: string | null; original: string | null; hasKey: boolean; generation: number; warning: string }
 export interface OfflineStatus { installed: string[]; engineVersion: string }
 export interface DownloadProgress { stage: string; received: number; total: number }

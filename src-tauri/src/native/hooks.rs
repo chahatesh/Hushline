@@ -270,7 +270,10 @@ fn invalidates_mouse(message: u32, overlay_hit: impl FnOnce() -> bool) -> bool {
         // The overlay never activates a window or moves the original caret.
         // Stop must not revoke the very target it is about to deliver to.
         WM_LBUTTONDOWN => !overlay_hit(),
-        WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => true,
+        WM_RBUTTONDOWN | WM_MBUTTONDOWN => true,
+        // Scrolling does not move the editing caret. Fresh delivery inspection
+        // still verifies the active window, editability and protection.
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => false,
         _ => false,
     }
 }
@@ -301,15 +304,12 @@ mod tests {
     fn clicking_the_nonactivating_pill_to_stop_does_not_revoke_paste() {
         assert!(!invalidates_mouse(WM_LBUTTONDOWN, || true));
         assert!(invalidates_mouse(WM_LBUTTONDOWN, || false));
-        for message in [
-            WM_RBUTTONDOWN,
-            WM_MBUTTONDOWN,
-            WM_MOUSEWHEEL,
-            WM_MOUSEHWHEEL,
-        ] {
+        for message in [WM_RBUTTONDOWN, WM_MBUTTONDOWN] {
             assert!(invalidates_mouse(message, || true));
             assert!(invalidates_mouse(message, || false));
         }
+        assert!(!invalidates_mouse(WM_MOUSEWHEEL, || false));
+        assert!(!invalidates_mouse(WM_MOUSEHWHEEL, || false));
         assert!(!invalidates_mouse(WM_MOUSEMOVE, || false));
     }
     #[test]

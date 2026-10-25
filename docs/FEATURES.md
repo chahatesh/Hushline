@@ -1,6 +1,6 @@
 # Feature status
 
-Status describes 0.5.2, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
+Status describes 0.5.3, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
 
 | Requested feature | Status | Evidence / limit |
 | --- | --- | --- |
@@ -30,6 +30,7 @@ Status describes 0.5.2, not a promise of commercial equivalence. Versioned secti
 | Explicit numbered lists | Implemented | Tested spoken numbered-list commands across Casual/Standard/Formal, sequential numeric items through 15, multi-sentence items and surrounding prose. Literal mode preserves recognition. Ambiguous cues remain conservative. |
 | General dates, times and number normalization | Partially Implemented | No universal normalization engine; optional AI output is not counted as verified general grammar. |
 | Casual/Standard/Formal writing and advanced exact words | Partially Implemented | Independent style/AI choices and migration pass UI/unit checks. Local rules are English and conservative; stronger Formal rewriting requires AI. Full live writing quality/meaning preservation remains unverified. |
+| Fresh focused-field delivery | Partially Implemented | Code-only anchor/handoff, cancellation and compatibility regressions; fresh editable/protected-field inspection within the original window. App-managed focus/selection changes are accepted for dictation; live 0.5.3 acceptance remains unverified. |
 | Dictation through text-box layout changes | Partially Implemented | Screen-coordinate failure reproduced in a real Chrome field before the fix; new collapsed-selection and same-field/input regressions pass. All six real Chrome stable/reflow/changed-field cases pass after the fix; full speech-to-target acceptance remains open. |
 | Native accessibility protection and target/caret identity | Partially Implemented | Fail-closed UIA checks and equality tests exist. Interactive test could not acquire foreground focus in this execution environment. |
 | Password and read-only blocking | Partially Implemented | Native checks exist; the foreign-process Edit fixture verifies password/read-only rejection, while full live application compatibility remains pending. |

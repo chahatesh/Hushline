@@ -1,5 +1,15 @@
 # Quality and release verification
 
+## 0.5.3 focused delivery
+
+Ordinary dictation previously treated the early UIA snapshot as required delivery authority. That could block a completed transcript after inspection failed or a provider replaced its field identity. The recording now carries a content-free window/process/input anchor; at delivery, a worker inspects the currently focused editable field in that original window. Ordinary dictation deliberately follows app-managed focus changes inside that window, including a newly selected range. Clicking, typing, window changes and cancellation still revoke delivery. Protected/read-only/unknown editing surfaces and terminals remain refused.
+
+UIA runtime IDs are optional for this fresh focused delivery, while password, enabled, editable, owner-window and terminal checks remain required. The worker retries only read-only inspection, checks cancellation and the original anchor before mutation, and never repeats a dispatched paste or uncertain native edit. Clipboard restoration keeps its owner/sequence guards. Command Mode and approved previews retain strict original-selection checks; saved audio remains review-only.
+
+Normal dictation does not start an unnecessary early UIA lookup. Optional context has a separate bounded slot; a slow context provider cannot consume the delivery pool. On-demand snippet preview inspection preserves confirmation behavior. History uses the original process for app attribution if early metadata is unavailable and can store a fixed failure code when history is enabled. Old history rows load unchanged; private mode adds no new persistent diagnostics.
+
+This update follows the user's code-only constraint: no Computer Use, foreground browser interaction, or live microphone-to-cloud test is performed. Executed code/build checks and remaining live acceptance are recorded in versioned reports. A public Release remains gated by the incomplete live acceptance protocol.
+
 ## 0.5.2 field-reflow paste failure
 
 The old code compared caret rectangles captured before recording with their coordinates after transcription. A real owned Chrome textarea reproduced the failure: after capture, changing its margin and height caused insertion to fail with “The field changed before insertion” even though the same field remained focused and no user input occurred. The unit regression failed too. No private transcript or microphone audio is used by these fixtures.
