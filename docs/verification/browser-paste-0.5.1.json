@@ -1,9 +1,0 @@
-{
-  "kind": "actual native clipboard insertion; no speech provider",
-  "contenteditableWhiteSpace": "pre-wrap",
-  "checks": {
-    "textarea": true,
-    "contenteditable": true
-  },
-  "error": null
-}

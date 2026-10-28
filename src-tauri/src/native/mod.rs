@@ -16,7 +16,9 @@ pub use clipboard::copy_text;
 #[cfg(windows)]
 pub use cue::play_recording_cue;
 #[cfg(windows)]
-pub use hooks::{input_epoch, set_active, shortcut_capture, start_hooks, update_shortcuts};
+pub use hooks::{
+    input_epoch, refresh_hooks, set_active, shortcut_capture, start_hooks, update_shortcuts,
+};
 #[cfg(windows)]
 pub use overlay::{
     configure as configure_overlay, start as start_overlay, update as update_overlay,

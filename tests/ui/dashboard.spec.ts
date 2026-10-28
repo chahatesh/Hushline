@@ -1,6 +1,44 @@
 // SPDX-License-Identifier: MIT
 // UI behavior only. These tests do not claim native/Groq end-to-end acceptance.
 import { test, expect } from '@playwright/test';
+
+test('long error notifications wrap, retain dismiss controls and stack above playback', async ({page}) => {
+  await page.getByRole('button', {name:'Scratchpad', exact:true}).click();
+  await page.getByRole('textbox', {name:'Scratchpad', exact:true}).fill('A public notification layout fixture');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{
+      writeText: async () => { throw new Error('Unable to copy. ' + 'an_unbroken_error_identifier_'.repeat(100)); },
+    }});
+  });
+  await page.getByRole('button', {name:'Copy',exact:true}).click();
+  const toast = page.locator('.toast');
+  await expect(toast).toContainText('Unable to copy.');
+  // Layout-only playback fixture: this does not simulate successful audio playback.
+  await page.evaluate(() => {
+    const player = document.createElement('aside');
+    player.className = 'recording-player'; player.dataset.fixture = 'playback-layout';
+    const audio = document.createElement('audio'); audio.controls = true;
+    player.append(audio); document.querySelector('.feedback-stack')!.prepend(player);
+  });
+  for (const width of [1280, 900, 390]) {
+    await page.setViewportSize({width, height:720});
+    const bounds = await page.evaluate(() => {
+      const notice = document.querySelector('.toast')!.getBoundingClientRect();
+      const text = document.querySelector('.toast>span')!.getBoundingClientRect();
+      const dismiss = document.querySelector('.toast>button')!.getBoundingClientRect();
+      const player = document.querySelector('.recording-player')!.getBoundingClientRect();
+      return {left:notice.left,right:notice.right,top:notice.top,bottom:notice.bottom,textRight:text.right,dismissLeft:dismiss.left,playerBottom:player.bottom,bodyWidth:document.body.scrollWidth};
+    });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(width);
+    expect(bounds.bodyWidth).toBe(width);
+    expect(bounds.textRight).toBeLessThanOrEqual(bounds.dismissLeft);
+    expect(bounds.top - bounds.playerBottom).toBeGreaterThanOrEqual(10);
+    expect(bounds.bottom).toBeLessThanOrEqual(720);
+  }
+  await page.getByRole('button', {name:'Dismiss notification'}).click();
+  await expect(toast).toHaveCount(0);
+});
 test.beforeEach(async ({ page }) => { await page.goto('/'); await expect(page.getByRole('heading', { name: 'Let your thoughts flow.' })).toBeVisible(); });
 test('empty workspace, original branding, and honest native boundary', async ({ page }) => {
   await expect(page.getByText('Your first words belong here')).toBeVisible();

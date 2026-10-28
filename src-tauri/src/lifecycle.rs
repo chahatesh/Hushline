@@ -128,6 +128,18 @@ pub fn native_outcome<T>(result: &Result<T, String>) -> &'static str {
 pub fn aborts_processing(action: Action) -> bool {
     action == Action::Cancel
 }
+pub fn shortcut_cancellation(
+    action: Action,
+    provider: &tokio_util::sync::CancellationToken,
+    delivery: &tokio_util::sync::CancellationToken,
+) {
+    if aborts_processing(action) {
+        provider.cancel();
+    }
+    if blocks_delivery(action) {
+        delivery.cancel();
+    }
+}
 pub fn finish_current_before_recording(phase: &str, stopping: bool, action: Action) -> bool {
     (phase == "processing" || stopping)
         && matches!(action, Action::Push | Action::HandsFree | Action::Command)
@@ -227,6 +239,45 @@ impl PushGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shortcut_prefixes_and_repeated_recording_cannot_cancel_transcription() {
+        use tokio_util::sync::CancellationToken;
+        for action in [
+            Action::Push,
+            Action::Release,
+            Action::HandsFree,
+            Action::Command,
+        ] {
+            let provider = CancellationToken::new();
+            let delivery = provider.child_token();
+            shortcut_cancellation(action, &provider, &delivery);
+            assert!(
+                !provider.is_cancelled(),
+                "{action:?} discarded in-flight audio"
+            );
+            assert!(
+                !delivery.is_cancelled(),
+                "{action:?} revoked the intended field"
+            );
+        }
+        for action in [
+            Action::Copy,
+            Action::Open,
+            Action::Scratchpad,
+            Action::Paste,
+            Action::ImprovePrompt,
+        ] {
+            let provider = CancellationToken::new();
+            let delivery = provider.child_token();
+            shortcut_cancellation(action, &provider, &delivery);
+            assert!(!provider.is_cancelled());
+            assert!(delivery.is_cancelled());
+        }
+        let provider = CancellationToken::new();
+        let delivery = provider.child_token();
+        shortcut_cancellation(Action::Cancel, &provider, &delivery);
+        assert!(provider.is_cancelled() && delivery.is_cancelled());
+    }
     #[test]
     fn repeated_record_shortcuts_cannot_discard_inflight_transcripts() {
         for action in [Action::Push, Action::HandsFree, Action::Command] {

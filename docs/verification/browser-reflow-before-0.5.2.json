@@ -1,8 +1,0 @@
-{
-  "kind": "actual native clipboard insertion with live hooks; no speech provider",
-  "contenteditableWhiteSpace": "pre-wrap",
-  "checks": {
-    "textarea_stable": true
-  },
-  "error": "Error: textarea/reflow: native insertion failed"
-}

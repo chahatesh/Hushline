@@ -5,16 +5,28 @@ use crate::{
     shortcuts::{self, Action, Chord, ALT, CTRL, SHIFT, WIN},
 };
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc, Mutex, OnceLock,
 };
 use windows::Win32::{
     Foundation::*,
+    System::Threading::GetCurrentThreadId,
     UI::{Accessibility::*, WindowsAndMessaging::*},
 };
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 static DICTATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPTURE_UNTIL: AtomicU64 = AtomicU64::new(0);
+static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
+const REFRESH_HOOKS: u32 = WM_APP + 41;
+/// Event-driven recovery; never polls keys or installs hooks from an input callback.
+pub fn refresh_hooks() {
+    let thread = HOOK_THREAD.load(Ordering::Acquire);
+    if thread != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread, REFRESH_HOOKS, WPARAM(0), LPARAM(0));
+        }
+    }
+}
 fn monotonic_ms() -> u64 {
     static START: OnceLock<std::time::Instant> = OnceLock::new();
     START
@@ -61,7 +73,7 @@ pub fn update_shortcuts(s: &Shortcuts) {
     if let Some(state) = STATE.get() {
         if let Ok(mut state) = state.lock() {
             state.bindings = bindings;
-            if state.held.take().is_some() {
+            if state.reset() {
                 if let Some(tx) = SENDER.get() {
                     let _ = tx.send(Action::Release);
                 }
@@ -83,10 +95,14 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
         .map_err(|_| "Shortcut handler already started.")?;
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     std::thread::spawn(move || unsafe {
-        let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0);
-        let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0);
-        match (keyboard, mouse) {
-            (Ok(k), Ok(m)) => {
+        // PostThreadMessage requires the destination's message queue to exist.
+        let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        HOOK_THREAD.store(GetCurrentThreadId(), Ordering::Release);
+        let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0);
+        let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0);
+        match (keyboard_hook, mouse_hook) {
+            (Ok(mut k), Ok(mut m)) => {
                 let foreground = SetWinEventHook(
                     EVENT_SYSTEM_FOREGROUND,
                     EVENT_SYSTEM_FOREGROUND,
@@ -96,15 +112,56 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                     0,
                     WINEVENT_OUTOFCONTEXT,
                 );
+                let desktop = SetWinEventHook(
+                    EVENT_SYSTEM_DESKTOPSWITCH,
+                    EVENT_SYSTEM_DESKTOPSWITCH,
+                    None,
+                    Some(focus_event),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                );
                 let _ = ready_tx.send(Ok(()));
-                let mut msg = MSG::default();
-                while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                    if msg.message == REFRESH_HOOKS {
+                        // Keep the old pair if Windows temporarily refuses a replacement.
+                        let next_keyboard =
+                            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0);
+                        let next_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0);
+                        match (next_keyboard, next_mouse) {
+                            (Ok(next_k), Ok(next_m)) => {
+                                let _ = UnhookWindowsHookEx(k);
+                                let _ = UnhookWindowsHookEx(m);
+                                k = next_k;
+                                m = next_m;
+                                if STATE
+                                    .get()
+                                    .and_then(|s| s.lock().ok())
+                                    .is_some_and(|mut s| s.reset())
+                                {
+                                    if let Some(tx) = SENDER.get() {
+                                        let _ = tx.send(Action::Release);
+                                    }
+                                }
+                            }
+                            (next_k, next_m) => {
+                                if let Ok(next_k) = next_k {
+                                    let _ = UnhookWindowsHookEx(next_k);
+                                }
+                                if let Ok(next_m) = next_m {
+                                    let _ = UnhookWindowsHookEx(next_m);
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
                 let _ = UnhookWindowsHookEx(k);
                 let _ = UnhookWindowsHookEx(m);
                 let _ = UnhookWinEvent(foreground);
+                let _ = UnhookWinEvent(desktop);
             }
             (k, m) => {
                 if let Ok(k) = k {
@@ -113,9 +170,13 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                 if let Ok(m) = m {
                     let _ = UnhookWindowsHookEx(m);
                 }
-                let _=ready_tx.send(Err("Windows refused the global input hooks. Restart Hushline at normal user permissions.".into()));
+                let _ = ready_tx.send(Err(
+                    "Windows refused the global shortcuts. Reopen Hush at normal user permissions."
+                        .into(),
+                ));
             }
         }
+        HOOK_THREAD.store(0, Ordering::Release);
     });
     ready_rx
         .recv_timeout(std::time::Duration::from_secs(3))
@@ -125,6 +186,11 @@ fn modifier(key: u16) -> bool {
     matches!(key,0x10..=0x12|0x5b..=0x5c|0xa0..=0xa5)
 }
 impl Keys {
+    fn reset(&mut self) -> bool {
+        self.down.fill(false);
+        self.consumed.fill(false);
+        self.held.take().is_some()
+    }
     fn modifiers(&self) -> u8 {
         let d = &self.down;
         (if d[0x11] || d[0xa2] || d[0xa3] {
@@ -286,6 +352,11 @@ unsafe extern "system" fn focus_event(
     _: u32,
     _: u32,
 ) {
+    if event == EVENT_SYSTEM_DESKTOPSWITCH {
+        EPOCH.fetch_add(1, Ordering::SeqCst);
+        refresh_hooks();
+        return;
+    }
     if invalidates_focus(event) {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
@@ -327,6 +398,24 @@ mod tests {
                 .map(|(c, a)| (shortcuts::parse(c).unwrap(), a))
                 .collect(),
         }
+    }
+    #[test]
+    fn a_desktop_switch_clears_missed_releases_and_preserves_bindings() {
+        let mut s = keys();
+        s.route(0xa2, true, false);
+        s.route(0x5b, true, false);
+        assert!(s.reset());
+        assert!(!s.reset(), "Only the held capture is released, once");
+        assert!(s.down.iter().all(|key| !key));
+        assert!(s.consumed.iter().all(|key| !key));
+        s.route(0xa3, true, false);
+        assert_eq!(s.route(0x5c, true, false).1, vec![Action::Push]);
+        assert_eq!(s.route(0x5c, false, true).1, vec![Action::Release]);
+        s.route(0xa3, false, false);
+        s.route(0x20, true, false); // Lost Space key-up on an inactive desktop.
+        s.reset();
+        s.route(0xa2, true, false);
+        assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
     }
     #[test]
     fn release_of_specific_chord_never_retriggers_push() {

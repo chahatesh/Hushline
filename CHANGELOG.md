@@ -1,9 +1,18 @@
 # Changelog
 
+## 0.6.1 — 2026-10-28
+
+- Refresh shortcut hooks on dashboard open, desktop switches and Windows resume; clear stale held-key state.
+- Keep in-flight transcription and delivery alive when a recording shortcut is pressed again. Escape still cancels; opening Hush preserves the transcript.
+- Retry malformed successful provider responses and give stalled speech requests a bounded attempt timeout within the existing total wait.
+- Keep native notification text and recovery buttons inside their current animated bounds. Dashboard notifications wrap long errors and stack below playback controls.
+- Simplify public documentation and remove maintainer setup handoffs and archived work logs. User, contributor, privacy, license and testing documentation remain.
+
+
 ## Signing integration — unreleased
 
 - Prepare free SignPath Foundation signing with constrained app/uninstaller and outer-installer requests, trusted Authenticode/timestamp/content verification, and signed portable packaging. Enrollment and production signing remain pending.
-- Keep the functional release gate; draft releases consume only verified signed files. Standalone signing builds produce artifacts without publishing a Release. Add signing/privacy policies and an honest application draft.
+- Keep the functional release gate; draft releases consume only verified signed files. Standalone signing builds produce artifacts without publishing a Release. Add signing and privacy policies.
 - Test real NSIS export/import and throwaway in-memory Authenticode fixtures, tamper rejection and refusal of untrusted/test signers; no Windows root trust is changed.
 
 
@@ -14,7 +23,7 @@
 - Encrypt saved audio with user-bound Windows DPAPI. Bound storage to 30 days, 1,000 recordings and 512 MB. Add a recording-storage switch; private mode/disabled storage use only the latest three memory clips, bounded to 64 MB. Downloads are explicitly requested, unencrypted WAV files. Cancelled new dictations are discarded.
 - Raise the former five-second default transcription timeout to 30 seconds while preserving other configured waits. Longer recordings receive additional bounded time; manual retry gets at least 60 seconds, capped at 120. Fast replies never wait for the deadline.
 - Retry interrupted/invalid response bodies as well as recoverable HTTP/network failures, within one maximum of three requests. Respect rate limits and cancellation, bound response size, retain fixed actionable failure reasons, and preserve speech captured before an endpoint failure. Quiet captures remain available for listening/manual retry and are never automatically uploaded.
-- Keep existing app/storage identities, provider/key, history, shortcuts, writing styles, private mode and independent AI settings. Old transcript and saved-recording metadata remain readable. No Computer Use or subagents are used for this update.
+- Keep existing app/storage identities, provider/key, history, shortcuts, writing styles, private mode and independent AI settings. Old transcript and saved-recording metadata remain readable.
 
 ## 0.5.3 — unreleased
 
@@ -23,7 +32,7 @@
 - Keep window/process/input authority through recording, transcription and delivery. Skip unnecessary early UIA for normal dictation; optional context uses its own bounded slot and cannot occupy delivery slots. Read-only inspection retries happen before clipboard ownership, never after a paste/edit dispatch.
 - Retain strict original-selection checks for Command Mode, approved previews and saved-audio recovery. Preserve snippet confirmation with an on-demand strict field snapshot. Allow scrolling without cancelling delivery, and give held modifiers up to three seconds to release within the existing delivery deadline.
 - Store a fixed failure code alongside failed history rows when history is enabled. Old rows remain compatible; no field contents, provider error payloads or keys are added to diagnostics.
-- Add code-only regressions for failed/slow early inspection, the recording-to-delivery handoff, window/process/input guards, command selection waiting and history compatibility. No Computer Use tools are used for this update.
+- Add code-only regressions for failed/slow early inspection, the recording-to-delivery handoff, window/process/input guards, command selection waiting and history compatibility.
 
 ## 0.5.2 — unreleased
 
@@ -60,7 +69,6 @@
 - Center the timer in both expanded and compact side docks; keep the bottom timer left-aligned.
 - Ignore accessibility focus events from background windows when deciding whether the original field changed. Foreground changes and actual input still invalidate automatic insertion.
 - Validate clipboard publication after closing it, and check both clipboard owner and sequence before paste/restoration so a newer user copy remains protected.
-- Record the user's requirement to work without subagents in project instructions.
 
 ## 0.4.0 — unreleased
 
@@ -70,7 +78,7 @@
 - Add Casual, Standard, and Formal writing styles independently of Always/Sometimes/Never AI polish, with exact-word preservation under Advanced transcription. Migrate legacy profiles without resetting provider, shortcuts, double-tap, history, key, or timeout choices.
 - Strengthen explicit self-correction handling, mixed prose/list parsing, multi-sentence items, and mode-specific AI instructions. Validate against corrected meaning, protect unrelated facts/identifiers, and retain local text when AI output is rejected or times out. Ambiguous wording remains conservative; universal semantic accuracy is not claimed.
 - Add shortcut-only Improve prompt (Ctrl+Win+P): read one complete focused editable field up to 32 KB, Clarify or Expand with a 20-second AI deadline, and review/edit before Apply/Copy/Cancel. Optional additions and assumptions are labeled. Revalidate the unchanged original field before a single approved replacement; preserve unsupported/changed fields. Prompt contents stay transient and out of history/diagnostics. Proposed output is limited to 100 KB.
-- Add bounded, memory-only stage timing/outcome diagnostics with explicit export, plus migration, state/deadline, writing, prompt-edit, and interface regressions. See QA.md for actual executed results.
+- Add bounded, memory-only stage timing/outcome diagnostics with explicit export, plus migration, state/deadline, writing, prompt-edit, and interface regressions. See docs/QA.md for actual executed results.
 - Recording cues, revised native behavior, whole-field prompt support, and uninterrupted live Groq-to-application acceptance remain partially verified until the required Windows checks pass. The public GitHub Release gate remains closed.
 
 ## 0.3.3 — 2026-10-20
@@ -79,7 +87,7 @@
 - Add a five-second, configurable speech deadline with the requested error above the pill. Cancel expired work so late results cannot paste.
 - Keep failed audio for Retry/Delete in Home, encrypted using Windows DPAPI. Retain at most three clips for seven days; private-mode audio stays in memory. Successful retries discard saved audio and return text for review/copy.
 - Bound optional cleanup waits and fall back to local formatting. Add deadline, retention, private-storage, browser and native regressions.
-- Full live dictation acceptance and the public release gate remain pending; see QA.md.
+- Full live dictation acceptance and the public release gate remain pending; see docs/QA.md.
 
 ## 0.3.2 — unreleased
 

@@ -465,11 +465,31 @@ fn recovery_buttons(card: RECT, scale: f64) -> (RECT, RECT) {
         },
     )
 }
+fn notice_regions(card: RECT, scale: f64, recoverable: bool) -> (RECT, Option<(RECT, RECT)>) {
+    let padding = (14.0 * scale) as i32;
+    // During unfolding use the current client size, never the final target size.
+    let buttons = (recoverable && card.bottom - card.top >= (80.0 * scale) as i32)
+        .then(|| recovery_buttons(card, scale));
+    let top = card.top + padding;
+    let bottom = buttons.map_or(card.bottom - padding, |(paste, _)| {
+        paste.top - (8.0 * scale) as i32
+    });
+    (
+        RECT {
+            left: card.left + padding,
+            top,
+            right: card.right - padding,
+            bottom: bottom.max(top),
+        },
+        buttons,
+    )
+}
 fn recovery_action(view: &OverlayView, card: RECT, scale: f64, x: i32, y: i32) -> Option<Action> {
     if !can_recover(view) || card.bottom == 0 {
         return None;
     }
-    let (paste, copy) = recovery_buttons(card, scale);
+    let (_, buttons) = notice_regions(card, scale, true);
+    let (paste, copy) = buttons?;
     let inside = |r: RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
     if inside(paste) {
         Some(Action::Paste)
@@ -707,6 +727,14 @@ unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: HFONT, _color: COLORREF,
     let _ = SelectObject(hdc, previous);
 }
 unsafe fn wrapped_text(hdc: HDC, value: &str, mut rect: RECT, font: HFONT) {
+    if value.is_empty() || rect.bottom <= rect.top || rect.right <= rect.left {
+        return;
+    }
+    let saved = SaveDC(hdc);
+    if saved == 0 {
+        return;
+    }
+    IntersectClipRect(hdc, rect.left, rect.top, rect.right, rect.bottom);
     let previous = SelectObject(hdc, HGDIOBJ(font.0));
     let _ = SetTextColor(hdc, rgb(255, 255, 255));
     let mut text: Vec<u16> = value.encode_utf16().collect();
@@ -715,10 +743,11 @@ unsafe fn wrapped_text(hdc: HDC, value: &str, mut rect: RECT, font: HFONT) {
             hdc,
             &mut text,
             &mut rect,
-            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS | DT_EDITCONTROL,
         );
     }
     let _ = SelectObject(hdc, previous);
+    let _ = RestoreDC(hdc, saved);
 }
 // Signed distance to a rounded box gives fractional edge coverage at every DPI.
 // Unlike a window region, per-pixel alpha retains the antialiased outer pixels.
@@ -969,29 +998,17 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
         let _ = SetBkMode(dc, TRANSPARENT);
         text(dc, &timer, rect, p.small.get(), ink, side);
     }
+    let card = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: top,
+    };
+    let (notice_rect, buttons) = notice_regions(card, scale, expanded && can_recover(&view));
     if expanded && top > 0 {
-        let padding = (14.0 * scale) as i32;
         let _ = SetBkMode(dc, TRANSPARENT);
-        wrapped_text(
-            dc,
-            &notice_text(&view),
-            RECT {
-                left: padding,
-                top: padding,
-                right: width - padding,
-                bottom: (top
-                    - padding
-                    - if can_recover(&view) {
-                        (36.0 * scale) as i32
-                    } else {
-                        0
-                    })
-                .max(padding),
-            },
-            p.font.get(),
-        );
-        if can_recover(&view) {
-            let (paste, copy) = recovery_buttons(p.notice.get(), scale);
+        wrapped_text(dc, &notice_text(&view), notice_rect, p.font.get());
+        if let Some((paste, copy)) = buttons {
             for (rect, label, color) in [
                 (paste, "Paste here", rgb(101, 78, 217)),
                 (copy, "Copy text", rgb(52, 63, 87)),
@@ -1023,7 +1040,6 @@ unsafe fn paint(hwnd: HWND, p: &Painter) {
     } else {
         1.0
     };
-    let buttons = (expanded && can_recover(&view)).then(|| recovery_buttons(p.notice.get(), scale));
     for (index, (pixel, mask)) in pixels.iter_mut().zip(memory.iter()).enumerate() {
         if mask & 255 == 0 {
             continue;
@@ -1229,6 +1245,15 @@ unsafe extern "system" fn procedure(
             position(hwnd, &p, false);
             LRESULT(0)
         }
+        WM_POWERBROADCAST
+            if matches!(
+                wparam.0 as u32,
+                PBT_APMRESUMESUSPEND | PBT_APMRESUMEAUTOMATIC
+            ) =>
+        {
+            super::hooks::refresh_hooks();
+            LRESULT(1)
+        }
         WM_LBUTTONUP => {
             let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
             let mut client = RECT::default();
@@ -1239,7 +1264,16 @@ unsafe extern "system" fn procedure(
             let scale = p.dpi.get() as f64 / 96.0;
             let pill = p.pill.get();
             let in_pill = x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom;
-            if let Some(action) = recovery_action(&view, p.notice.get(), scale, x, y) {
+            let card = if p.notice.get().bottom > 0 {
+                RECT {
+                    right: client.right,
+                    bottom: pill.top,
+                    ..RECT::default()
+                }
+            } else {
+                RECT::default()
+            };
+            if let Some(action) = recovery_action(&view, card, scale, x, y) {
                 let _ = p.tx.send(action);
                 return LRESULT(0);
             }
@@ -1282,6 +1316,27 @@ unsafe extern "system" fn procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notice_text_never_overlaps_buttons_or_pill_while_unfolding() {
+        for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            for height in 0..=350 {
+                let card = RECT {
+                    right: (340.0 * scale) as i32,
+                    bottom: (height as f64 * scale) as i32,
+                    ..RECT::default()
+                };
+                let (text, buttons) = notice_regions(card, scale, true);
+                if text.bottom > text.top {
+                    assert!(text.top >= 0 && text.bottom <= card.bottom);
+                }
+                if let Some((paste, copy)) = buttons {
+                    assert!(text.bottom < paste.top);
+                    assert!(paste.top < paste.bottom && paste.bottom <= card.bottom);
+                    assert!(paste.right < copy.left && copy.right <= card.right);
+                }
+            }
+        }
+    }
     #[test]
     fn recovery_notices_stay_readable_without_extending_recording_details() {
         let mut view = OverlayView {

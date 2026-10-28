@@ -1,6 +1,6 @@
 # Offline dictation
 
-Hush 0.2 can transcribe speech, format notes and paragraphs, apply dictionary rules and snippets, and retain local history without an internet connection after setup. No Groq API key is needed in offline mode. It never silently uploads a recording or falls back to cloud inference.
+Hush can transcribe speech, format notes and paragraphs, apply dictionary rules and snippets, and retain local history without an internet connection after setup. No Groq API key is needed in offline mode. It never silently uploads a recording or falls back to cloud inference.
 
 ## Speech setup
 
@@ -25,7 +25,7 @@ If local editing is unavailable, ordinary dictation with local formatting still 
 
 ## Privacy and performance
 
-Raw WAV is piped to the speech engine through standard input. No plaintext audio file is written. Failed recordings may be retained as Windows-encrypted blobs for retry; private mode keeps them only in memory. See Home → Saved audio. A temporary JSON transcript is written inside an automatically cleaned temporary directory, then removed on completion or cancellation. A forced OS/process crash can leave a temporary transcript directory; remove `transcript-*` directories from the offline folder when Hush is closed if needed. Local history is controlled separately by the private-mode setting. Only recovery audio is encrypted; ordinary settings and transcript history are not. The default five-second speech deadline also applies offline. Increase Settings → Dictation → Transcription timeout for long clips or slower CPUs.
+Raw WAV is piped to the speech engine through standard input. No plaintext audio file is written. Completed recordings can be retained as Windows-encrypted blobs for listening and retry; private mode keeps them only in bounded memory. See History. A temporary JSON transcript is written inside an automatically cleaned temporary directory, then removed on completion or cancellation. A forced OS/process crash can leave a temporary transcript directory; remove `transcript-*` directories from the offline folder when Hush is closed if needed. Local history is controlled separately by the private-mode setting. Only recovery audio is encrypted; ordinary settings and transcript history are not. The default 30-second speech deadline also applies offline, with additional bounded time for long recordings and retries. Increase Settings → Dictation → Transcription timeout for long clips or slower CPUs.
 
 The speech model is loaded by a hidden child process only while transcribing; it is not resident while Hush rests. Cancellation kills and reaps that process. CPU-only inference can be slower than Groq, particularly for long recordings and larger models. The model-size labels describe downloads, not maximum RAM use. See [measured results](PERFORMANCE.md); there is no blanket speed or accuracy guarantee.
 
@@ -33,6 +33,6 @@ Upstream: [whisper.cpp](https://github.com/ggml-org/whisper.cpp/tree/v1.9.2), [m
 
 ## Small models and long edits
 
-A real qwen3:0.6b trial is documented in [LOCAL_MODEL.md](LOCAL_MODEL.md). A small download still needs substantial active memory and can take seconds to load/edit; it is not an instant, negligible-RAM replacement for local formatting. The benchmark model was isolated from the normal Ollama profile and is not bundled or selected automatically.
+A qwen3:0.6b trial is summarized in [performance measurements](PERFORMANCE.md). A small download still needs substantial active memory and can take seconds to load/edit; it is not an instant, negligible-RAM replacement for local formatting. The benchmark model was isolated from the normal Ollama profile and is not bundled or selected automatically.
 
 The editing client disables optional thinking, reserves explicit input/output context, and refuses text that exceeds a safe local budget instead of allowing silent prompt truncation. Automatic cleanup also checks for missing identifiers, changed numeric content and severe shortening before accepting a rewrite. Those checks are conservative and do not prove semantic accuracy. Every Command Mode edit still needs its preview/selection safeguards.

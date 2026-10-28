@@ -38,6 +38,7 @@ impl Groq {
         &self,
         cancel: &CancellationToken,
         invalid: &'static str,
+        usable: impl Fn(&serde_json::Value) -> bool,
         mut make: F,
     ) -> Result<serde_json::Value, String>
     where
@@ -52,7 +53,13 @@ impl Groq {
                 Ok(r) if r.status().is_success() => {
                     // A connection can break after successful headers. Decode
                     // inside the same three-attempt budget as HTTP failures.
-                    match response_json(r, cancel).await {
+                    match response_json(r, cancel).await.and_then(|json| {
+                        if usable(&json) {
+                            Ok(json)
+                        } else {
+                            Err(invalid.into())
+                        }
+                    }) {
                         Ok(json) => return Ok(json),
                         Err(_) if cancel.is_cancelled() => return Err("Cancelled".into()),
                         Err(_) if attempt == 2 => return Err(invalid.into()),
@@ -98,11 +105,16 @@ impl Groq {
         cancel: &CancellationToken,
     ) -> Result<Vec<String>, String> {
         let json = self
-            .send(cancel, "Groq returned invalid model information.", || {
-                self.client
-                    .get(format!("{}/models", self.base))
-                    .bearer_auth(key)
-            })
+            .send(
+                cancel,
+                "Groq returned invalid model information.",
+                |json| json["data"].is_array(),
+                || {
+                    self.client
+                        .get(format!("{}/models", self.base))
+                        .bearer_auth(key)
+                },
+            )
             .await?;
         let list: HashSet<String> = json["data"]
             .as_array()
@@ -126,10 +138,17 @@ impl Groq {
         if wav.len() > 24_000_000 {
             return Err("Recording exceeds the safe upload size. Use shorter recordings.".into());
         }
+        // Reserve time for subsequent attempts inside the caller's total budget.
+        // RequestBuilder's timeout covers connection, headers AND body reads.
+        let attempt_timeout = Duration::from_millis(
+            (u64::from(s.transcription_timeout_seconds) * 1000).saturating_sub(1500) / 3,
+        )
+        .max(Duration::from_millis(500));
         let json = self
             .send(
                 cancel,
                 "Groq returned an invalid transcript. Your recording can be retried.",
+                |json| json["text"].as_str().is_some_and(|s| s.len() <= 100_000),
                 || {
                     let part = reqwest::multipart::Part::bytes(wav.clone())
                         .file_name("dictation.wav")
@@ -148,6 +167,7 @@ impl Groq {
                     }
                     self.client
                         .post(format!("{}/audio/transcriptions", self.base))
+                        .timeout(attempt_timeout)
                         .bearer_auth(key)
                         .multipart(form)
                 },
@@ -193,12 +213,17 @@ impl Groq {
             body["reasoning_effort"] = "low".into();
         }
         let json = self
-            .send(cancel, "Groq returned an invalid edit.", || {
-                self.client
-                    .post(format!("{}/chat/completions", self.base))
-                    .bearer_auth(key)
-                    .json(&body)
-            })
+            .send(
+                cancel,
+                "Groq returned an invalid edit.",
+                |json| json["choices"][0]["message"]["content"].is_string(),
+                || {
+                    self.client
+                        .post(format!("{}/chat/completions", self.base))
+                        .bearer_auth(key)
+                        .json(&body)
+                },
+            )
             .await?;
         if json["choices"][0]["finish_reason"].as_str() == Some("length") {
             return Err("The edit was truncated. Select less text and try again.".into());
@@ -326,6 +351,9 @@ mod tests {
                 }
                 tx.send(String::from_utf8_lossy(&data).to_string()).unwrap();
                 std::thread::sleep(delay);
+                if headers.contains("X-Test-Stall") {
+                    std::thread::sleep(Duration::from_millis(1100));
+                }
                 let declared = body.len()
                     + if headers.contains("X-Test-Partial-Body") {
                         32
@@ -490,6 +518,70 @@ mod tests {
             vec!["test-model"]
         );
         assert_eq!(rx.iter().count(), 2);
+    }
+    #[tokio::test]
+    async fn retries_valid_json_without_a_usable_transcript() {
+        let (g, requests) = server(vec![
+            (
+                200,
+                "",
+                r#"{"error":{"message":"temporary provider response"}}"#,
+            ),
+            (
+                200,
+                "",
+                r#"{"text":"Recovered words","language":"english"}"#,
+            ),
+        ]);
+        let speech = g
+            .transcribe(
+                "test-only-key",
+                b"RIFF fixture".to_vec(),
+                &Settings::default(),
+                "",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(speech.text, "Recovered words");
+        assert_eq!(requests.iter().count(), 2);
+    }
+    #[tokio::test]
+    async fn a_stalled_attempt_does_not_consume_the_entire_speech_budget() {
+        let (g, requests) = server(vec![
+            (
+                200,
+                "X-Test-Stall: yes\r\n",
+                r#"{"text":"Late response must be dropped"}"#,
+            ),
+            (200, "", r#"{"text":"Complete retry"}"#),
+        ]);
+        let settings = Settings {
+            transcription_timeout_seconds: 3,
+            ..Settings::default()
+        };
+        let result = crate::deadline::run(
+            Duration::from_secs(3),
+            &CancellationToken::new(),
+            |cancel| async move {
+                g.transcribe(
+                    "test-only-key",
+                    b"RIFF original recording".to_vec(),
+                    &settings,
+                    "",
+                    &cancel,
+                )
+                .await
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "Complete retry");
+        let sent: Vec<_> = requests.iter().collect();
+        assert_eq!(sent.len(), 2);
+        assert!(sent
+            .iter()
+            .all(|request| request.contains("RIFF original recording")));
     }
     #[tokio::test]
     async fn retries_an_interrupted_transcription_response_with_the_same_audio() {

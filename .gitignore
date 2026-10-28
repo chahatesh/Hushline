@@ -17,3 +17,6 @@ playwright-report/
 *.pfx
 *.key
 *.pem
+
+# Local workspace instructions
+/AGENTS.md

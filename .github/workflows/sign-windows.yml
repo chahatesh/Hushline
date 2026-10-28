@@ -26,7 +26,7 @@ jobs:
         shell: pwsh
         run: |
           if ($env:TOKEN_PRESENT -ne 'true' -or -not $env:ORGANIZATION_ID -or -not $env:PROJECT_SLUG -or -not $env:POLICY_SLUG) {
-            throw 'SignPath Foundation enrollment is not configured. Follow docs/SIGNING.md; no unsigned fallback will be published.'
+            throw 'SignPath Foundation enrollment is not configured. Production signing credentials are required; no unsigned fallback will be published.'
           }
           $organization = [guid]::Empty
           if (-not [guid]::TryParse($env:ORGANIZATION_ID, [ref]$organization)) { throw 'Invalid SignPath organization ID.' }

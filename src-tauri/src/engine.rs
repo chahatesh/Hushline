@@ -533,29 +533,28 @@ async fn process(
     let snippets: Vec<Snippet> = state.store.get("snippets")?;
     let styles: Vec<Style> = state.store.get("styles")?;
     let hints = text::vocabulary_hint(&dictionary);
+    let speech_wait = speech_timeout(
+        &session.settings,
+        recording.duration_ms,
+        session.recovery_id.is_some(),
+    );
+    let mut request_settings = session.settings.clone();
+    request_settings.transcription_timeout_seconds = speech_wait.as_secs() as u32;
     let (speech_state, speech_settings, speech_hints, speech_key) =
-        (&state, &session.settings, &hints, &key);
-    let speech = deadline::run(
-        speech_timeout(
-            &session.settings,
-            recording.duration_ms,
-            session.recovery_id.is_some(),
-        ),
-        &cancel,
-        |request| async move {
-            if let Some(key) = speech_key.as_ref() {
-                speech_state
-                    .groq
-                    .transcribe(key, recording.wav, speech_settings, speech_hints, &request)
-                    .await
-            } else {
-                speech_state
-                    .offline
-                    .transcribe(recording.wav, speech_settings, speech_hints, &request)
-                    .await
-            }
-        },
-    )
+        (&state, &request_settings, &hints, &key);
+    let speech = deadline::run(speech_wait, &cancel, |request| async move {
+        if let Some(key) = speech_key.as_ref() {
+            speech_state
+                .groq
+                .transcribe(key, recording.wav, speech_settings, speech_hints, &request)
+                .await
+        } else {
+            speech_state
+                .offline
+                .transcribe(recording.wav, speech_settings, speech_hints, &request)
+                .await
+        }
+    })
     .await?;
     let local_mode = text::local_mode(
         &session.settings.mode,
@@ -1349,7 +1348,10 @@ async fn actor(
                 delivery.cancel();
                 stop_for_navigation(&app, &state, &mut session);
                 match action {
-                    Action::Open => show(&app, None),
+                    Action::Open => {
+                        native::refresh_hooks();
+                        show(&app, None);
+                    }
                     Action::Scratchpad => show(&app, Some("Scratchpad")),
                     Action::Copy => {
                         let text = state.view.lock().unwrap().last_text.clone();
@@ -2526,20 +2528,11 @@ pub fn run() {
             let cancel_state = state.clone();
             std::thread::spawn(move || {
                 while let Ok(action) = hook_rx.recv() {
-                    let restart = matches!(action, Action::HandsFree | Action::Command)
-                        && cancel_state
-                            .view
-                            .lock()
-                            .is_ok_and(|v| v.phase == "processing");
-                    if restart || lifecycle::aborts_processing(action) {
-                        if let Ok(token) = cancel_state.cancel.lock() {
-                            token.cancel();
-                        }
-                    }
-                    if restart || lifecycle::blocks_delivery(action) {
-                        if let Ok(token) = cancel_state.delivery_cancel.lock() {
-                            token.cancel();
-                        }
+                    if let (Ok(provider), Ok(delivery)) = (
+                        cancel_state.cancel.lock(),
+                        cancel_state.delivery_cancel.lock(),
+                    ) {
+                        lifecycle::shortcut_cancellation(action, &provider, &delivery);
                     }
                     if tx.send(Message::Action(action)).is_err() {
                         break;
