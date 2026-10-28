@@ -31,5 +31,9 @@
   "headlessUiTestsPassed": 19,
   "productionCommit": "8b0a22e666261daab1496e6f324765ca99c1eb11",
   "optimizedBuild": "passed: final executable, NSIS installer and portable ZIP",
-  "installer": "passed: per-user silent install, background launch, notices, clean uninstall, profile retention and unrelated legacy registration/shortcuts unchanged"
+  "installer": "passed: per-user silent install, background launch, notices, clean uninstall, profile retention and unrelated legacy registration/shortcuts unchanged",
+  "hostedTestCommit": "8025d575d4c56d2156a4d5122077104694c1e625",
+  "hostedCI": "https://github.com/chahatesh/Hushline/actions/runs/40609804255",
+  "hostedWindowsChecks": "passed: all frontend/browser/Rust checks, actual offline CPU speech fixture, installer/portable build and artifact upload",
+  "appReopened": "passed: final workspace executable reports 0.6.0 and Ready; no Computer Use"
 }
