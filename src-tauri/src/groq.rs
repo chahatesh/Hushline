@@ -34,7 +34,12 @@ impl Groq {
             models: Mutex::new(None),
         })
     }
-    async fn send<F>(&self, cancel: &CancellationToken, mut make: F) -> Result<Response, String>
+    async fn send<F>(
+        &self,
+        cancel: &CancellationToken,
+        invalid: &'static str,
+        mut make: F,
+    ) -> Result<serde_json::Value, String>
     where
         F: FnMut() -> reqwest::RequestBuilder,
     {
@@ -42,22 +47,34 @@ impl Groq {
             return Err("Cancelled".into());
         }
         for attempt in 0..3u32 {
-            let response = tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), r=make().send()=>r };
-            match response {
-                Ok(r) if r.status().is_success() => return Ok(r),
+            let response = tokio::select! { biased; _=cancel.cancelled()=>return Err("Cancelled".into()), r=make().send()=>r };
+            let delay = match response {
+                Ok(r) if r.status().is_success() => {
+                    // A connection can break after successful headers. Decode
+                    // inside the same three-attempt budget as HTTP failures.
+                    match response_json(r, cancel).await {
+                        Ok(json) => return Ok(json),
+                        Err(_) if cancel.is_cancelled() => return Err("Cancelled".into()),
+                        Err(_) if attempt == 2 => return Err(invalid.into()),
+                        Err(_) => Duration::from_millis(400 * u64::from(attempt + 1)),
+                    }
+                }
                 Ok(r) => {
                     let status = r.status();
                     let delay = r
                         .headers()
                         .get("retry-after")
                         .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(1 << attempt);
-                    let retry = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-                    if !retry || attempt == 2 || delay > 10 {
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .unwrap_or(f64::from(1 << attempt));
+                    let retry = status == StatusCode::TOO_MANY_REQUESTS
+                        || status == StatusCode::REQUEST_TIMEOUT
+                        || status.is_server_error();
+                    if !retry || attempt == 2 || delay > 10.0 {
                         return Err(http_error(status));
                     }
-                    tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), _=tokio::time::sleep(Duration::from_millis(delay*1000+137))=>{} }
+                    Duration::from_secs_f64(delay) + Duration::from_millis(137)
                 }
                 Err(e) => {
                     if attempt == 2 {
@@ -68,9 +85,10 @@ impl Groq {
                         }
                         .into());
                     }
-                    tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), _=tokio::time::sleep(Duration::from_millis(400*(attempt+1) as u64))=>{} }
+                    Duration::from_millis(400 * u64::from(attempt + 1))
                 }
-            }
+            };
+            tokio::select! { biased; _=cancel.cancelled()=>return Err("Cancelled".into()), _=tokio::time::sleep(delay)=>{} }
         }
         Err("Groq request failed.".into())
     }
@@ -79,14 +97,13 @@ impl Groq {
         key: &str,
         cancel: &CancellationToken,
     ) -> Result<Vec<String>, String> {
-        let r = self
-            .send(cancel, || {
+        let json = self
+            .send(cancel, "Groq returned invalid model information.", || {
                 self.client
                     .get(format!("{}/models", self.base))
                     .bearer_auth(key)
             })
             .await?;
-        let json: serde_json::Value = tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), r=r.json()=>r.map_err(|_|"Groq returned invalid model information.")? };
         let list: HashSet<String> = json["data"]
             .as_array()
             .ok_or("Groq returned an invalid model list.")?
@@ -109,30 +126,33 @@ impl Groq {
         if wav.len() > 24_000_000 {
             return Err("Recording exceeds the safe upload size. Use shorter recordings.".into());
         }
-        let r = self
-            .send(cancel, || {
-                let part = reqwest::multipart::Part::bytes(wav.clone())
-                    .file_name("dictation.wav")
-                    .mime_str("audio/wav")
-                    .expect("static MIME type");
-                let mut form = reqwest::multipart::Form::new()
-                    .part("file", part)
-                    .text("model", s.speech_model.clone())
-                    .text("response_format", "verbose_json")
-                    .text("temperature", "0");
-                if !s.language.is_empty() {
-                    form = form.text("language", s.language.clone());
-                }
-                if !hints.is_empty() {
-                    form = form.text("prompt", hints.chars().take(800).collect::<String>());
-                }
-                self.client
-                    .post(format!("{}/audio/transcriptions", self.base))
-                    .bearer_auth(key)
-                    .multipart(form)
-            })
+        let json = self
+            .send(
+                cancel,
+                "Groq returned an invalid transcript. Your recording can be retried.",
+                || {
+                    let part = reqwest::multipart::Part::bytes(wav.clone())
+                        .file_name("dictation.wav")
+                        .mime_str("audio/wav")
+                        .expect("static MIME type");
+                    let mut form = reqwest::multipart::Form::new()
+                        .part("file", part)
+                        .text("model", s.speech_model.clone())
+                        .text("response_format", "verbose_json")
+                        .text("temperature", "0");
+                    if !s.language.is_empty() {
+                        form = form.text("language", s.language.clone());
+                    }
+                    if !hints.is_empty() {
+                        form = form.text("prompt", hints.chars().take(800).collect::<String>());
+                    }
+                    self.client
+                        .post(format!("{}/audio/transcriptions", self.base))
+                        .bearer_auth(key)
+                        .multipart(form)
+                },
+            )
             .await?;
-        let json: serde_json::Value = tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), r=r.json()=>r.map_err(|_|"Groq returned an invalid transcript.")? };
         let text = json["text"]
             .as_str()
             .filter(|v| v.len() <= 100_000)
@@ -172,15 +192,14 @@ impl Groq {
         if matches!(model, "openai/gpt-oss-20b" | "openai/gpt-oss-120b") {
             body["reasoning_effort"] = "low".into();
         }
-        let r = self
-            .send(cancel, || {
+        let json = self
+            .send(cancel, "Groq returned an invalid edit.", || {
                 self.client
                     .post(format!("{}/chat/completions", self.base))
                     .bearer_auth(key)
                     .json(&body)
             })
             .await?;
-        let json: serde_json::Value = tokio::select! { _=cancel.cancelled()=>return Err("Cancelled".into()), r=r.json()=>r.map_err(|_|"Groq returned an invalid edit.")? };
         if json["choices"][0]["finish_reason"].as_str() == Some("length") {
             return Err("The edit was truncated. Select less text and try again.".into());
         }
@@ -191,6 +210,28 @@ impl Groq {
             .map(str::to_owned)
             .ok_or("Groq returned an empty edit.".into())
     }
+}
+async fn response_json(
+    mut response: Response,
+    cancel: &CancellationToken,
+) -> Result<serde_json::Value, String> {
+    const LIMIT: usize = 2 * 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|length| length > LIMIT as u64)
+    {
+        return Err("Response exceeds its size limit.".into());
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = tokio::select! { biased; _=cancel.cancelled()=>return Err("Cancelled".into()), result=response.chunk()=>result.map_err(|_| "Interrupted provider response.")? };
+        let Some(chunk) = chunk else { break };
+        if body.len().saturating_add(chunk.len()) > LIMIT {
+            return Err("Response exceeds its size limit.".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| "Invalid provider response.".into())
 }
 fn http_error(status: StatusCode) -> String {
     match status.as_u16() {
@@ -285,7 +326,13 @@ mod tests {
                 }
                 tx.send(String::from_utf8_lossy(&data).to_string()).unwrap();
                 std::thread::sleep(delay);
-                let _ = write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",body.len());
+                let declared = body.len()
+                    + if headers.contains("X-Test-Partial-Body") {
+                        32
+                    } else {
+                        0
+                    };
+                let _ = write!(stream,"HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {declared}\r\nConnection: close\r\n{headers}\r\n{body}");
             }
         });
         let mut groq = Groq::new().unwrap();
@@ -338,6 +385,22 @@ mod tests {
         wav[8..12].copy_from_slice(b"WAVE");
         let settings = Settings::default();
         let token = CancellationToken::new();
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let recovery = Recovery::default();
+        let saved = recovery.save(
+            &store,
+            Recording {
+                wav: wav.clone(),
+                duration_ms: 1000,
+                limit_reached: false,
+                requires_review: false,
+                speech_detected: true,
+                encoding_ms: 0,
+            },
+            true,
+        );
+        assert!(!saved.in_memory);
+        assert_eq!(recovery.load(&store, &saved.id).unwrap().wav, wav);
         let sent = wav.clone();
         let speech_settings = &settings;
         let result = deadline::run(Duration::from_millis(250), &token, |child| async move {
@@ -351,20 +414,11 @@ mod tests {
             .unwrap()
             .contains("POST /audio/transcriptions"));
         assert!(!token.is_cancelled());
-        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
-        let recovery = Recovery::default();
-        let saved = recovery.save(
-            &store,
-            Recording {
-                wav: wav.clone(),
-                duration_ms: 1000,
-                limit_reached: false,
-                requires_review: false,
-                encoding_ms: 0,
-            },
-            true,
-        );
-        assert!(!saved.in_memory);
+        recovery
+            .finish_attempt(&store, &saved.id, Some(deadline::AUDIO_TIMEOUT))
+            .unwrap();
+        assert_eq!(recovery.list(&store).unwrap()[0].status, "failed");
+        recovery.begin_retry(&store, &saved.id).unwrap();
         let loaded = recovery.load(&store, &saved.id).unwrap();
         assert_eq!(loaded.wav, wav);
         let (fast, request) = server(vec![(200, "", r#"{"text":"Recovered speech"}"#)]);
@@ -375,6 +429,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(speech.text, "Recovered speech");
+        recovery.finish_attempt(&store, &saved.id, None).unwrap();
+        assert_eq!(recovery.list(&store).unwrap()[0].status, "ready");
+        assert_eq!(recovery.load(&store, &saved.id).unwrap().wav, wav);
         assert!(request
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
@@ -435,6 +492,36 @@ mod tests {
         assert_eq!(rx.iter().count(), 2);
     }
     #[tokio::test]
+    async fn retries_an_interrupted_transcription_response_with_the_same_audio() {
+        for (headers, body) in [
+            ("", r#"{"text":"interrupted"#),
+            (
+                "X-Test-Partial-Body: yes\r\n",
+                r#"{"text":"Partial HTTP body"}"#,
+            ),
+        ] {
+            let (g, requests) = server(vec![
+                (200, headers, body),
+                (200, "", r#"{"text":"Complete recording"}"#),
+            ]);
+            let result = g
+                .transcribe(
+                    "test-only-key",
+                    b"RIFF public audio fixture".to_vec(),
+                    &Settings::default(),
+                    "",
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert_eq!(result.unwrap().text, "Complete recording");
+            let sent: Vec<_> = requests.iter().collect();
+            assert_eq!(sent.len(), 2);
+            assert!(sent
+                .iter()
+                .all(|request| request.contains("RIFF public audio fixture")));
+        }
+    }
+    #[tokio::test]
     async fn respects_long_rate_limit_without_retrying() {
         let (g, rx) = server(vec![(429, "Retry-After: 3600\r\n", "{}")]);
         let e = g
@@ -453,6 +540,43 @@ mod tests {
             .unwrap_err();
         assert!(!e.contains("secret-from-server"));
         assert_eq!(rx.iter().count(), 1);
+    }
+    #[tokio::test]
+    async fn malformed_responses_have_a_single_three_attempt_budget() {
+        let (g, requests) = server(vec![
+            (200, "", "broken"),
+            (503, "Retry-After: 0\r\n", "{}"),
+            (200, "", "broken"),
+        ]);
+        let error = g
+            .transcribe(
+                "test-only-key",
+                b"RIFF public fixture".to_vec(),
+                &Settings::default(),
+                "",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("invalid transcript"));
+        assert_eq!(requests.iter().count(), 3);
+    }
+    #[tokio::test]
+    async fn cancellation_interrupts_rate_limit_wait_without_another_request() {
+        let (g, requests) = server(vec![(429, "Retry-After: 8\r\n", "{}")]);
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            cancel.cancel();
+        });
+        let started = Instant::now();
+        assert_eq!(
+            g.models("test-only-key", &token).await.unwrap_err(),
+            "Cancelled"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(requests.iter().count(), 1);
     }
     #[tokio::test]
     async fn cancellation_prevents_network_request() {

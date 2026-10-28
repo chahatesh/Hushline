@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $workspaceRoot = [IO.Path]::GetFullPath($projectRoot)
-$target = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts\installer-smoke-0.5.3'))
+$target = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts\installer-smoke-0.6.0'))
 if (-not $target.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar)) { throw 'Installer target must be inside this workspace.' }
 if (Test-Path -LiteralPath $target) { throw 'Test directory already exists; refusing to replace it.' }
 if (Get-Process hushline -ErrorAction SilentlyContinue) { throw 'Quit Hushline before the installer test.' }
@@ -11,7 +11,7 @@ foreach ($registryRoot in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uni
   if ($existing) { throw 'An existing Hushline installation was found; refusing to change it.' }
 }
 if ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name Hushline -ErrorAction SilentlyContinue)) { throw 'An existing Hushline startup entry was found; refusing to change it.' }
-$installer = Join-Path $projectRoot 'src-tauri\target\release\bundle\nsis\Hush_0.5.3_x64-setup.exe'
+$installer = Join-Path $projectRoot 'src-tauri\target\release\bundle\nsis\Hush_0.6.0_x64-setup.exe'
 # Preserve any unrelated legacy Hush registration and its shortcuts. Our custom
 # template uses the unique bundle identifier and "Hush Dictation" shortcut names.
 $template = Get-Content -LiteralPath (Join-Path $projectRoot 'src-tauri\windows\installer.nsi') -Raw

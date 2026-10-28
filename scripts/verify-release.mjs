@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 const report = JSON.parse(fs.readFileSync(new URL('../docs/release-verification.json', import.meta.url), 'utf8'));
 const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const required = ['installLaunch', 'saveKey', 'selectMicrophone', 'pushToTalkNotepad', 'browserDictation', 'handsFree', 'cancel', 'focusChange', 'clipboardRestore', 'commandPreview', 'startupReadyCue', 'shortAnswers', 'promptClarifyExpand', 'promptPreviewChangedField', 'independentBuild'];
+const required = ['installLaunch', 'saveKey', 'selectMicrophone', 'pushToTalkNotepad', 'browserDictation', 'handsFree', 'cancel', 'focusChange', 'clipboardRestore', 'commandPreview', 'startupReadyCue', 'shortAnswers', 'promptClarifyExpand', 'promptPreviewChangedField', 'independentBuild', 'recordingHistory', 'recordingRetry', 'recordingPlaybackDownload', 'recordingDeletionPrivateMode'];
 if (report.version !== version || !report.tester || !report.hardware || !report.testedAt || required.some(key => report.checks[key] !== true)) {
   throw new Error('Public release blocked: core Windows/Groq acceptance evidence is incomplete. Complete docs/release-verification.json with real results.');
 }

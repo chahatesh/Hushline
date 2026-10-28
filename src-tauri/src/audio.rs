@@ -28,6 +28,7 @@ pub struct Recording {
     pub limit_reached: bool,
     pub encoding_ms: u64,
     pub requires_review: bool,
+    pub speech_detected: bool,
 }
 pub struct Engine {
     tx: mpsc::Sender<Request>,
@@ -249,8 +250,14 @@ fn finish(
         return;
     }
     if let Some(error) = failure {
-        let _ = active.request.events.send(Event::Finished(Err(error)));
-        return;
+        if active.samples.is_empty() {
+            let _ = active.request.events.send(Event::Finished(Err(error)));
+            return;
+        }
+        // Keep speech already captured when an endpoint disconnects or Stop
+        // fails. Missing audio cannot be recovered, so flag the partial clip.
+        active.requires_review = true;
+        let _ = active.request.events.send(Event::Warning);
     }
     // Encoding is separate from ownership of the prepared endpoint: another
     // shortcut can start capture immediately without waiting for this work.
@@ -366,10 +373,8 @@ fn worker(rx: mpsc::Receiver<Request>) {
     }
 }
 fn encode(active: &Active) -> Result<Recording, String> {
-    if active.voice_frames < active.rate as usize * 15 / 100 {
-        return Err(
-            "I couldn't hear any speech. Check your microphone or adjust voice sensitivity.".into(),
-        );
+    if active.samples.is_empty() {
+        return Err("The microphone returned no audio. Check your selected device.".into());
     }
     let started = Instant::now();
     let mono = resample(&active.samples, active.rate);
@@ -398,6 +403,7 @@ fn encode(active: &Active) -> Result<Recording, String> {
         limit_reached: active.limit_reached || active.samples.len() >= active.max,
         encoding_ms: started.elapsed().as_millis() as u64,
         requires_review: active.requires_review,
+        speech_detected: active.voice_frames >= active.rate as usize * 15 / 100,
     })
 }
 fn silence_expired(
@@ -474,6 +480,86 @@ fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quiet_capture_still_produces_recoverable_audio() {
+        let (events, _) = mpsc::channel();
+        let now = Instant::now();
+        let active = Active {
+            request: Start {
+                id: 1,
+                settings: Settings::default(),
+                events,
+                cancelled: Arc::new(AtomicBool::new(false)),
+                silence: Arc::new(AtomicBool::new(false)),
+                ready: Arc::new(AtomicBool::new(true)),
+            },
+            samples: vec![0.0; 16000],
+            rate: 16000,
+            max: 160000,
+            rms: 0.0,
+            voice_frames: 0,
+            last_voice: 0,
+            started: now,
+            last_packet: now,
+            limit_reached: false,
+            requires_review: false,
+        };
+        let recording =
+            encode(&active).expect("Quiet audio should be retained for explicit listening/retry");
+        assert_eq!(recording.wav.len(), 32044);
+        assert!(!recording.speech_detected);
+    }
+    #[test]
+    fn endpoint_failure_preserves_captured_speech_but_cancel_does_not() {
+        for cancel in [false, true] {
+            let (events, received) = mpsc::channel();
+            let now = Instant::now();
+            let active = Active {
+                request: Start {
+                    id: 1,
+                    settings: Settings::default(),
+                    events,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    silence: Arc::new(AtomicBool::new(false)),
+                    ready: Arc::new(AtomicBool::new(true)),
+                },
+                samples: (0..16000).map(|n| (n as f32 * 0.08).sin() * 0.3).collect(),
+                rate: 16000,
+                max: 160000,
+                rms: 0.2,
+                voice_frames: 16000,
+                last_voice: 16000,
+                started: now,
+                last_packet: now,
+                limit_reached: false,
+                requires_review: false,
+            };
+            finish(
+                active,
+                &mut None,
+                cancel,
+                Some("Test endpoint disconnected".into()),
+            );
+            loop {
+                match received.recv_timeout(Duration::from_secs(3)).unwrap() {
+                    Event::Finished(result) => {
+                        if cancel {
+                            assert_eq!(result.unwrap_err(), "Cancelled");
+                        } else {
+                            let recording = result.unwrap();
+                            assert!(recording.requires_review);
+                            assert_eq!(recording.duration_ms, 1000);
+                            assert_eq!(&recording.wav[..4], b"RIFF");
+                            assert!(recording.wav.len() >= 32044);
+                        }
+                        break;
+                    }
+                    Event::Warning => assert!(!cancel),
+                    _ => panic!("Unexpected capture event"),
+                }
+            }
+        }
+    }
     #[test]
     #[ignore = "Tests cold first use and normal microphone Stop locally; no upload or saved audio."]
     fn cold_first_use_and_normal_stop() {

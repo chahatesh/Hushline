@@ -20,7 +20,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
     case 'microphones': result = []; break;
     case 'set_shortcut_capture': break;
     case 'delete_saved_audio': data.savedAudio = data.savedAudio.filter(a => a.id !== args.id); break;
-    case 'delete_history': data.history = args.id ? data.history.filter(t => t.id !== args.id) : []; break;
+    case 'delete_history': data.savedAudio = args.id ? data.savedAudio.filter(a => !data.history.some(t => t.id === args.id && t.audioId === a.id)) : []; data.history = args.id ? data.history.filter(t => t.id !== args.id) : []; break;
     case 'export_configuration': result = { version: 1, settings: data.settings, dictionary: data.dictionary, snippets: data.snippets, styles: data.styles } satisfies Backup; break;
     case 'import_configuration': {
       const b = JSON.parse(String(args.content)) as Backup;
@@ -33,7 +33,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
   localStorage.setItem(previewKey, JSON.stringify(data));
   return result as T;
 }
-export function download(name: string, data: string, type = 'application/json') { const url = URL.createObjectURL(new Blob([data], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+export function download(name: string, data: string | Blob, type = 'application/json') { const url = URL.createObjectURL(new Blob([data], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 export function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 export function words(text: string) { return text.trim() ? text.trim().split(/\s+/u).length : 0; }
 export function shortcutParts(shortcut: string) { return shortcut.split('+').map(s => s === 'Win' ? 'Win' : s === 'Space' ? 'Space' : s); }

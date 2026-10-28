@@ -239,3 +239,64 @@ test('old polished profile upgrades without losing double tap or AI policy', asy
   await page.getByRole('tab', {name:'Shortcuts',exact:true}).click();
   await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Win+P');
 });
+
+test('recording history shows linked audio and failed recordings without simulating native playback', async ({page}) => {
+  await page.evaluate(() => localStorage.setItem('hushline-browser-preview-v1', JSON.stringify({
+    history: [
+      {id:'result',audioId:'public-recording',text:'Pack the camera and charge the batteries.',createdAt:'2026-10-27T16:00:00Z',app:'Notepad.exe',words:8,durationMs:4000,latencyMs:300,inserted:true},
+      {id:'legacy',text:'An older note without recorded audio.',createdAt:'2026-10-26T16:00:00Z',app:'Notepad.exe',words:7,durationMs:3000,latencyMs:200,inserted:true},
+    ],
+    savedAudio: [
+      {id:'public-recording',transcriptId:'result',createdAt:'2026-10-27T16:00:00Z',durationMs:4000,inMemory:false,requiresReview:false,status:'ready',attempts:1},
+      {id:'failed-recording',createdAt:'2026-10-27T16:05:00Z',durationMs:7000,inMemory:false,requiresReview:false,status:'failed',attempts:2,lastError:'The connection failed. Check your network, then retry.'},
+    ],
+  })));
+  await page.reload(); await page.getByRole('navigation', {name:'Main navigation'}).getByRole('button', {name:/^History/u}).click();
+  const linked = page.locator('.transcript-row').filter({hasText:'Pack the camera'});
+  await expect(linked.getByRole('button', {name:'Listen',exact:true})).toBeVisible();
+  await expect(linked.getByRole('button', {name:'Download recording',exact:true})).toBeDisabled();
+  await expect(linked.getByRole('button', {name:'Retry transcription',exact:true})).toBeDisabled();
+  await expect(page.locator('.transcript-row').filter({hasText:'An older note'}).locator('.recording-actions')).toHaveCount(0);
+  await expect(page.locator('.saved-audio')).toContainText('The connection failed.');
+  await expect(page.locator('.saved-audio')).toContainText('2 attempts');
+  await expect(page.locator('.saved-audio')).toContainText('Your recording stays available after a retry.');
+  await page.screenshot({path:'output/playwright/recordings-0.6.0.png',fullPage:true});
+  await page.setViewportSize({width:900,height:700});
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 900);
+  await linked.getByRole('button', {name:'Delete transcript',exact:true}).click();
+  await expect(page.getByRole('alertdialog')).toContainText('recording');
+  await page.getByRole('button', {name:'Delete permanently',exact:true}).click();
+  const state = await page.evaluate(() => JSON.parse(localStorage.getItem('hushline-browser-preview-v1')!));
+  expect(state.savedAudio.map((clip: {id:string}) => clip.id)).toEqual(['failed-recording']);
+});
+
+test('clear history removes recordings even when no transcript was returned', async ({page}) => {
+  await page.evaluate(() => localStorage.setItem('hushline-browser-preview-v1', JSON.stringify({savedAudio:[{id:'private',createdAt:'2026-10-27T16:00:00Z',durationMs:1000,inMemory:true,status:'failed',attempts:1,requiresReview:false}]})));
+  await page.reload(); await page.getByRole('button', {name:'History',exact:true}).click();
+  await expect(page.getByRole('button', {name:'Clear all',exact:true})).toBeEnabled();
+  await page.getByRole('button', {name:'Clear all',exact:true}).click();
+  await page.getByRole('button', {name:'Delete permanently',exact:true}).click();
+  await expect(page.locator('.saved-audio')).toHaveCount(0);
+  const state = await page.evaluate(() => JSON.parse(localStorage.getItem('hushline-browser-preview-v1')!));
+  expect(state.savedAudio).toEqual([]);
+});
+
+test('recording storage preference persists and configuration excludes recordings', async ({page}) => {
+  await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Dictation',exact:true}).click();
+  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('30');
+  await page.getByRole('tab', {name:'Privacy & data',exact:true}).click();
+  await expect(page.getByRole('switch', {name:/^Save recording audio with history/u})).toBeChecked();
+  await page.getByRole('switch', {name:/^Save recording audio with history/u}).uncheck();
+  await page.getByRole('button', {name:'Save settings',exact:true}).click();
+  await page.reload(); await page.getByRole('button', {name:'Settings',exact:true}).click();
+  await page.getByRole('tab', {name:'Privacy & data',exact:true}).click();
+  await expect(page.getByRole('switch', {name:/^Save recording audio with history/u})).not.toBeChecked();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByText('Export configuration', {exact:true}).click();
+  const file = await downloadEvent;
+  const stream = await file.createReadStream(); const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+  const backup = JSON.parse(Buffer.concat(chunks).toString());
+  expect(backup).not.toHaveProperty('savedAudio'); expect(backup).not.toHaveProperty('history');
+});

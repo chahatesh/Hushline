@@ -83,6 +83,7 @@ struct Session {
 }
 struct Completed {
     recovery_id: Option<String>,
+    audio_id: Option<String>,
     text: String,
     target: Result<Target, String>,
     origin: Option<native::FocusAnchor>,
@@ -128,6 +129,7 @@ struct Job {
     origin: Option<native::FocusAnchor>,
     command: bool,
     recovery_id: Option<String>,
+    audio_id: Option<String>,
 }
 impl From<Session> for Job {
     fn from(s: Session) -> Self {
@@ -138,34 +140,86 @@ impl From<Session> for Job {
             origin: s.origin,
             command: s.command,
             recovery_id: None,
+            audio_id: None,
         }
     }
 }
 fn spawn_process(
     state: Arc<AppState>,
-    job: Job,
+    mut job: Job,
     recording: audio::Recording,
     cancel: CancellationToken,
 ) {
     tauri::async_runtime::spawn(async move {
         let id = job.id;
         let retry = job.recovery_id.is_some();
-        let persist = job.settings.history_enabled;
-        let backup = recording.clone();
-        let result = process(state.clone(), job, recording, cancel.clone()).await;
-        let save =
-            !retry && result.as_ref().is_err_and(|e| e != "Cancelled") && !cancel.is_cancelled();
-        let _ = state.tx.send(Message::Done(id, Box::new(result)));
-        if save {
+        // Protect the original before reading keys, uploading or rewriting.
+        // Storage failure falls back to bounded memory without losing dictation.
+        let info = if let Some(clip_id) = job.recovery_id.clone() {
+            job.audio_id = Some(clip_id);
+            None
+        } else {
+            let backup = recording.clone();
+            let settings = job.settings.clone();
             let st = state.clone();
             let saved = tauri::async_runtime::spawn_blocking(move || {
-                let persist = persist && st.settings.read().unwrap().history_enabled;
+                let current = st.settings.read().unwrap();
+                let persist = settings.history_enabled
+                    && settings.save_recordings
+                    && current.history_enabled
+                    && current.save_recordings;
+                drop(current);
                 st.recovery.save(&st.store, backup, persist)
             })
             .await;
-            if let Ok(info) = saved {
-                let _ = state.tx.send(Message::RecoverySaved(id, info.in_memory));
+            let saved = saved
+                .unwrap_or_else(|_| state.recovery.save(&state.store, recording.clone(), false));
+            job.audio_id = Some(saved.id.clone());
+            Some(saved)
+        };
+        let audio_id = job.audio_id.clone();
+        let mut result = process(state.clone(), job, recording, cancel.clone()).await;
+        if let Some(ref clip_id) = audio_id {
+            let st = state.clone();
+            let clip_id = clip_id.clone();
+            let error = result.as_ref().err().cloned();
+            let discard =
+                !retry && (cancel.is_cancelled() || error.as_deref() == Some("Cancelled"));
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                if discard {
+                    st.recovery.delete(&st.store, &clip_id)
+                } else {
+                    st.recovery
+                        .finish_attempt(&st.store, &clip_id, error.as_deref())
+                }
+            })
+            .await;
+        }
+        if let Ok(done) = &mut result {
+            if info.as_ref().is_some_and(|saved| saved.in_memory)
+                && done.settings.history_enabled
+                && done.settings.save_recordings
+            {
+                if !done.warning.is_empty() {
+                    done.warning.push(' ');
+                }
+                done.warning.push_str(
+                    "Audio could only be kept in memory. Download it before quitting Hush.",
+                );
             }
+        }
+        let failed = result.as_ref().is_err_and(|e| e != "Cancelled") && !cancel.is_cancelled();
+        let _ = state.tx.send(Message::Done(id, Box::new(result)));
+        if failed {
+            let memory = info.as_ref().is_some_and(|saved| saved.in_memory)
+                || audio_id.as_ref().is_some_and(|id| {
+                    state
+                        .recovery
+                        .list(&state.store)
+                        .ok()
+                        .is_some_and(|clips| clips.iter().any(|c| &c.id == id && c.in_memory))
+                });
+            let _ = state.tx.send(Message::RecoverySaved(id, memory));
         }
     });
 }
@@ -464,6 +518,9 @@ async fn process(
     cancel: CancellationToken,
 ) -> Result<Completed, String> {
     let started = Instant::now();
+    if !recording.speech_detected && session.recovery_id.is_none() {
+        return Err("I couldn't hear any speech. Your recording is saved: listen to it or retry with different speech settings.".into());
+    }
     if !capture_delivery_allowed(session.command, recording.requires_review) {
         return Err("Microphone audio was interrupted. Please repeat the edit command; nothing was changed.".into());
     }
@@ -479,7 +536,11 @@ async fn process(
     let (speech_state, speech_settings, speech_hints, speech_key) =
         (&state, &session.settings, &hints, &key);
     let speech = deadline::run(
-        Duration::from_secs(session.settings.transcription_timeout_seconds as u64),
+        speech_timeout(
+            &session.settings,
+            recording.duration_ms,
+            session.recovery_id.is_some(),
+        ),
         &cancel,
         |request| async move {
             if let Some(key) = speech_key.as_ref() {
@@ -625,6 +686,7 @@ async fn process(
     }
     Ok(Completed {
         recovery_id: session.recovery_id,
+        audio_id: session.audio_id,
         text: output,
         target,
         origin: if session.command {
@@ -646,6 +708,19 @@ fn capture_delivery_allowed(command: bool, requires_review: bool) -> bool {
     // are rejected before transcription, so partial instructions cannot edit text.
     !command || !requires_review
 }
+fn speech_timeout(settings: &Settings, duration_ms: u64, retry: bool) -> Duration {
+    // A deliberate retry gets enough time to reconnect/load an offline model.
+    // Longer recordings need a larger bounded budget; fast responses never wait.
+    let seconds = u64::from(settings.transcription_timeout_seconds)
+        .max(if retry { 60 } else { 0 })
+        .max(if duration_ms > 30_000 {
+            30 + duration_ms / 10_000
+        } else {
+            0
+        })
+        .min(120);
+    Duration::from_secs(seconds)
+}
 fn polish_or_local(local: &str, candidate: Result<String, String>) -> (String, bool) {
     match candidate {
         Ok(value) if !value.trim().is_empty() && text::validate_cleanup(local, &value).is_ok() => {
@@ -658,6 +733,33 @@ fn polish_or_local(local: &str, candidate: Result<String, String>) -> (String, b
 #[cfg(test)]
 mod capture_quality_tests {
     use super::*;
+    #[test]
+    fn longer_recordings_and_retries_get_bounded_time_without_delaying_fast_results() {
+        let settings = Settings {
+            transcription_timeout_seconds: 5,
+            ..Settings::default()
+        };
+        assert_eq!(
+            speech_timeout(&settings, 1000, false),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            speech_timeout(&settings, 1000, true),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            speech_timeout(&settings, 600_000, false),
+            Duration::from_secs(90)
+        );
+        assert_eq!(
+            speech_timeout(&settings, u64::MAX, true),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            speech_timeout(&Settings::default(), 1000, false),
+            Duration::from_secs(30)
+        );
+    }
     #[tokio::test]
     async fn recording_handoff_keeps_delivery_authority_when_initial_inspection_fails() {
         let origin = native::FocusAnchor {
@@ -672,6 +774,7 @@ mod capture_quality_tests {
         assert!(target.is_err());
         let mut completed = Completed {
             recovery_id: None,
+            audio_id: None,
             text: "Public complete transcript".into(),
             target,
             origin: job.origin,
@@ -961,16 +1064,26 @@ fn finish_completed(
         None
     };
     if done.settings.history_enabled && state.settings.read().unwrap().history_enabled {
+        let record_id = done
+            .audio_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let previous = state.store.transcript(&record_id).ok().flatten();
         let record = Transcript {
-            id: uuid::Uuid::new_v4().to_string(),
+            // A retry updates its result instead of duplicating history/stats.
+            id: record_id,
             text: done.text.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: previous
+                .as_ref()
+                .map(|record| record.created_at.clone())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             app: done
                 .target
                 .as_ref()
                 .ok()
                 .map(|t| t.app.clone())
                 .or_else(|| done.origin.as_ref().and_then(native::app_for_anchor))
+                .or_else(|| previous.map(|record| record.app))
                 .unwrap_or_default(),
             words: done.text.split_whitespace().count() as u32,
             duration_ms: done.duration,
@@ -983,9 +1096,14 @@ fn finish_completed(
             } else {
                 Some(lifecycle::native_outcome::<()>(&Err(warning.clone())).into())
             },
+            audio_id: done.audio_id.clone(),
         };
         if let Err(e) = state.store.insert(&record) {
             warning = format!("Transcript ready; history could not be saved: {e}");
+        } else if let Some(ref audio_id) = done.audio_id {
+            let _ = state
+                .recovery
+                .attach_transcript(&state.store, audio_id, &record.id);
         }
     }
     publish(app, state, |v| {
@@ -1197,12 +1315,14 @@ async fn actor(
                     let loader = st.clone();
                     let load_id = clip_id.clone();
                     let recording = tauri::async_runtime::spawn_blocking(move || {
-                        loader.recovery.load(&loader.store, &load_id)
+                        let audio = loader.recovery.load(&loader.store, &load_id)?;
+                        loader.recovery.begin_retry(&loader.store, &load_id)?;
+                        Ok::<_, String>(audio)
                     })
                     .await;
                     match recording {
                         Ok(Ok(recording)) if !token.is_cancelled() => {
-                            let job=Job { id,settings,target:Some(ready_target(Err("Recovered recording: review and copy the transcript. Automatic paste is disabled.".into()))),origin:None,command:false,recovery_id:Some(clip_id) };
+                            let job=Job { id,settings,target:Some(ready_target(Err("Saved recording: review the transcript, then use Paste last in your text box.".into()))),origin:None,command:false,recovery_id:Some(clip_id),audio_id:None };
                             spawn_process(st, job, recording, token);
                         }
                         Ok(Err(e)) => {
@@ -1752,6 +1872,7 @@ async fn actor(
                 }
                 let Some(s) = session.take() else { continue };
                 if s.test {
+                    let result = result.and_then(|recording| if recording.speech_detected { Ok(recording) } else { Err("I couldn't hear any speech. Check your microphone or adjust voice sensitivity.".into()) });
                     publish(&app, &state, |v| {
                         v.phase = if result.is_ok() { "success" } else { "error" }.into();
                         v.stage.clear();
@@ -1805,15 +1926,8 @@ async fn actor(
                         schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
                     }
                     Ok(mut done) => {
-                        if let Some(clip_id) = done.recovery_id.clone() {
-                            let st = state.clone();
-                            let a = app.clone();
-                            tauri::async_runtime::spawn_blocking(move || {
-                                if st.recovery.delete(&st.store, &clip_id).is_ok() {
-                                    let _ = a.emit_to("main", "recovery-updated", ());
-                                }
-                            });
-                        }
+                        // A successful retry keeps its audio for listening or
+                        // another retry with different language/model settings.
                         if delivery_blocked {
                             done.target=Err("Automatic paste was skipped because you opened Hush or used another action. Your transcript is ready to copy.".into());
                             done.preview = false;
@@ -2134,7 +2248,21 @@ async fn available_models(state: State<'_, Arc<AppState>>) -> Result<Vec<String>
 }
 #[tauri::command]
 fn delete_history(state: State<Arc<AppState>>, id: Option<String>) -> Result<(), String> {
-    state.store.delete(id)
+    state.recovery.delete_history(&state.store, id)
+}
+#[tauri::command]
+async fn read_saved_audio(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
+    let st = state.inner().clone();
+    let wav = tauri::async_runtime::spawn_blocking(move || {
+        st.recovery.load(&st.store, &id).map(|audio| audio.wav)
+    })
+    .await
+    .map_err(|_| "Audio storage unavailable")??;
+    // Binary IPC on explicit Listen/Download only; never snapshot/base64/history.
+    Ok(tauri::ipc::Response::new(wav))
 }
 #[tauri::command]
 fn retry_audio(state: State<Arc<AppState>>, id: String) -> Result<(), String> {
@@ -2341,6 +2469,7 @@ pub fn run() {
             available_models,
             delete_history,
             retry_audio,
+            read_saved_audio,
             delete_saved_audio,
             copy_text,
             recover_text,

@@ -60,6 +60,7 @@ pub struct Settings {
     pub enhanced: bool,
     pub polish_policy: PolishPolicy,
     pub history_enabled: bool,
+    pub save_recordings: bool,
     pub context_enabled: bool,
     pub selection_permission: bool,
     pub max_seconds: u32,
@@ -75,7 +76,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            preferences_version: 5,
+            preferences_version: 6,
             provider: "groq".into(),
             offline_model: "tiny".into(),
             local_text_model: String::new(),
@@ -95,10 +96,11 @@ impl Default for Settings {
             enhanced: false,
             polish_policy: PolishPolicy::Never,
             history_enabled: true,
+            save_recordings: true,
             context_enabled: false,
             selection_permission: false,
             max_seconds: 600,
-            transcription_timeout_seconds: 5,
+            transcription_timeout_seconds: 30,
             silence_seconds: 0,
             vad_threshold: 0.012,
             double_tap: false,
@@ -111,50 +113,57 @@ impl Default for Settings {
 
 impl Settings {
     pub fn migrate(&mut self) -> bool {
-        if self.preferences_version >= 5 {
+        if self.preferences_version >= 6 {
             return false;
         }
-        // v0.1 shipped character injection as the default. Prefer one paste on upgrade.
-        if self.preferences_version < 2 {
-            self.insertion = "clipboard".into();
-        }
-        if self.preferences_version < 3 && self.max_seconds == 120 {
-            self.max_seconds = 600;
-        }
-        if self.preferences_version < 3 && self.silence_seconds == 8 {
-            self.silence_seconds = 0;
-        }
-        if self.preferences_version < 4 && (self.enhanced || self.mode == Mode::Polished) {
-            self.polish_policy = PolishPolicy::Always;
-        }
-        self.writing_style = match self.mode {
-            Mode::Literal => WritingStyle::Casual,
-            Mode::Clean => WritingStyle::Standard,
-            Mode::Polished => WritingStyle::Formal,
-        };
-        if self.mode == Mode::Polished {
-            self.mode = Mode::Clean;
-        }
-        // The newly introduced action must not invalidate an existing custom
-        // shortcut and prevent startup after an upgrade.
-        let occupied: Vec<_> = crate::shortcuts::bindings(&self.shortcuts)
-            .into_iter()
-            .filter(|(_, action)| *action != crate::shortcuts::Action::ImprovePrompt)
-            .filter_map(|(chord, _)| crate::shortcuts::parse(chord).ok())
-            .collect();
-        if crate::shortcuts::parse(&self.shortcuts.improve_prompt)
-            .is_ok_and(|c| occupied.contains(&c))
-        {
-            for candidate in std::iter::once("Ctrl+Win+Shift+P".to_string())
-                .chain((1..=24).map(|n| format!("Ctrl+Win+F{n}")))
+        if self.preferences_version < 5 {
+            // v0.1 shipped character injection as the default. Prefer one paste on upgrade.
+            if self.preferences_version < 2 {
+                self.insertion = "clipboard".into();
+            }
+            if self.preferences_version < 3 && self.max_seconds == 120 {
+                self.max_seconds = 600;
+            }
+            if self.preferences_version < 3 && self.silence_seconds == 8 {
+                self.silence_seconds = 0;
+            }
+            if self.preferences_version < 4 && (self.enhanced || self.mode == Mode::Polished) {
+                self.polish_policy = PolishPolicy::Always;
+            }
+            self.writing_style = match self.mode {
+                Mode::Literal => WritingStyle::Casual,
+                Mode::Clean => WritingStyle::Standard,
+                Mode::Polished => WritingStyle::Formal,
+            };
+            if self.mode == Mode::Polished {
+                self.mode = Mode::Clean;
+            }
+            // The newly introduced action must not invalidate an existing custom
+            // shortcut and prevent startup after an upgrade.
+            let occupied: Vec<_> = crate::shortcuts::bindings(&self.shortcuts)
+                .into_iter()
+                .filter(|(_, action)| *action != crate::shortcuts::Action::ImprovePrompt)
+                .filter_map(|(chord, _)| crate::shortcuts::parse(chord).ok())
+                .collect();
+            if crate::shortcuts::parse(&self.shortcuts.improve_prompt)
+                .is_ok_and(|c| occupied.contains(&c))
             {
-                if crate::shortcuts::parse(&candidate).is_ok_and(|c| !occupied.contains(&c)) {
-                    self.shortcuts.improve_prompt = candidate;
-                    break;
+                for candidate in std::iter::once("Ctrl+Win+Shift+P".to_string())
+                    .chain((1..=24).map(|n| format!("Ctrl+Win+F{n}")))
+                {
+                    if crate::shortcuts::parse(&candidate).is_ok_and(|c| !occupied.contains(&c)) {
+                        self.shortcuts.improve_prompt = candidate;
+                        break;
+                    }
                 }
             }
         }
-        self.preferences_version = 5;
+        // Replace the former five-second default, which could expire before
+        // connection setup/retries. Preserve all other explicit timeout values.
+        if self.transcription_timeout_seconds == 5 {
+            self.transcription_timeout_seconds = 30;
+        }
+        self.preferences_version = 6;
         true
     }
     pub fn validate(&self) -> Result<(), String> {
@@ -280,6 +289,8 @@ pub struct Transcript {
     /// Fixed diagnostic code only; never a provider payload or field contents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -342,10 +353,35 @@ mod tests {
         let old = serde_json::json!({"id":"public", "text":"Public fixture", "createdAt":"2026", "app":"fixture", "words":2, "durationMs":100, "latencyMs":20, "inserted":false});
         let record: Transcript = serde_json::from_value(old).unwrap();
         assert!(record.delivery_failure.is_none());
+        assert!(record.audio_id.is_none());
         assert!(serde_json::to_value(record)
             .unwrap()
             .get("deliveryFailure")
             .is_none());
+    }
+    #[test]
+    fn recording_upgrade_preserves_v5_styles_privacy_and_custom_timeouts() {
+        for timeout in [5, 12, 90] {
+            let mut settings = Settings {
+                preferences_version: 5,
+                writing_style: WritingStyle::Casual,
+                history_enabled: false,
+                double_tap: true,
+                transcription_timeout_seconds: timeout,
+                ..Settings::default()
+            };
+            assert!(settings.migrate());
+            assert_eq!(settings.preferences_version, 6);
+            assert_eq!(settings.writing_style, WritingStyle::Casual);
+            assert!(!settings.history_enabled);
+            assert!(settings.double_tap);
+            assert!(settings.save_recordings);
+            assert_eq!(
+                settings.transcription_timeout_seconds,
+                if timeout == 5 { 30 } else { timeout }
+            );
+            assert!(!settings.migrate());
+        }
     }
     #[test]
     fn style_upgrade_preserves_every_explicit_v4_preference() {
@@ -480,7 +516,7 @@ mod tests {
     #[test]
     fn transcription_deadline_defaults_and_bounds_survive_upgrade() {
         let mut settings: Settings = serde_json::from_str(r#"{"preferencesVersion":4}"#).unwrap();
-        assert_eq!(settings.transcription_timeout_seconds, 5);
+        assert_eq!(settings.transcription_timeout_seconds, 30);
         for seconds in [0, 2, 121, u32::MAX] {
             settings.transcription_timeout_seconds = seconds;
             assert!(settings.validate().is_err());

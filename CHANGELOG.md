@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — unreleased
+
+- Protect every completed dictation recording before key lookup, network requests or text processing. Retain successful audio and expose Listen, Download WAV and Retry alongside its transcript; failed/unlinked recordings remain available in History and Home.
+- Keep audio after successful or failed retries. Update the existing transcript instead of adding duplicate history/statistics. Delete linked audio with its transcript; Clear all removes persistent and memory recordings, including failures that produced no text.
+- Encrypt saved audio with user-bound Windows DPAPI. Bound storage to 30 days, 1,000 recordings and 512 MB. Add a recording-storage switch; private mode/disabled storage use only the latest three memory clips, bounded to 64 MB. Downloads are explicitly requested, unencrypted WAV files. Cancelled new dictations are discarded.
+- Raise the former five-second default transcription timeout to 30 seconds while preserving other configured waits. Longer recordings receive additional bounded time; manual retry gets at least 60 seconds, capped at 120. Fast replies never wait for the deadline.
+- Retry interrupted/invalid response bodies as well as recoverable HTTP/network failures, within one maximum of three requests. Respect rate limits and cancellation, bound response size, retain fixed actionable failure reasons, and preserve speech captured before an endpoint failure. Quiet captures remain available for listening/manual retry and are never automatically uploaded.
+- Keep existing app/storage identities, provider/key, history, shortcuts, writing styles, private mode and independent AI settings. Old transcript and saved-recording metadata remain readable. No Computer Use or subagents are used for this update.
+
 ## 0.5.3 — unreleased
 
 - Repeated recording shortcuts while audio is finishing or text is processing no longer cancel and discard the in-flight transcript. Finish the existing delivery first; Escape remains explicit cancellation.

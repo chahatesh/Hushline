@@ -1,6 +1,17 @@
 # Feature status
 
-Status describes 0.5.3, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
+Status describes 0.6.0, not a promise of commercial equivalence. Versioned sections preserve earlier evidence; current behavior and remaining acceptance checks are summarized below. **Implemented** means the feature has relevant executed verification; **Partially Implemented** means code exists but behavior is limited or its required real integration remains unverified; **Not Implemented** means absent. The complete acceptance criteria are not yet met. Nothing untested is marked complete.
+
+## 0.6.0 recording history
+
+| Feature | Status | Evidence and limits |
+| --- | --- | --- |
+| Audio saved before processing, including successful dictations | Partially Implemented | DPAPI/SQLite restart, digest, retention and retry tests pass. Live microphone-to-history acceptance remains unverified. Recording storage defaults on; private mode remains memory-only. |
+| Retained audio after retry and one updated history result | Implemented | Real storage upsert, failure/success/restart and explicit-delete regressions. Deleted clips cannot be resurrected by late metadata updates. |
+| Listen, WAV download, and Retry in History | Partially Implemented | Binary WAV contract and headless UI tests; actual packaged WebView2 playback/download and live retry-to-target acceptance remain open. Downloads are unencrypted. |
+| Retention, private mode and linked deletion | Implemented | DPAPI restart, 30-day expiry, count/byte pruning, bounded memory, linked history deletion and Clear all regressions. Audio is capped at 1,000 recordings/512 MB; private memory keeps three/64 MB. |
+| More tolerant transcription deadlines | Partially Implemented | Migration and bounded long-recording/retry budgets tested. Other explicit waits survive upgrades. Broad slow-network/offline hardware acceptance remains open. |
+| Response-body retries | Implemented | Real loopback HTTP client tests reproduce malformed/interrupted bodies, preserve the uploaded fixture, enforce three total attempts and interrupt rate-limit backoff on cancellation. |
 
 | Requested feature | Status | Evidence / limit |
 | --- | --- | --- |
@@ -127,8 +138,8 @@ The decisive missing evidence is an uninterrupted real user session: install →
 | Feature | Status | Evidence / limit |
 | --- | --- | --- |
 | Pill label removal, timer beside × | Partially Implemented | Native and browser layout checks run for bottom/side docks; physical mixed-DPI acceptance remains open. |
-| Five-second speech deadline, exact error | Partially Implemented | Cancellation and late-result regression; delayed loopback HTTP fixture exercises the real speech client. Real slow Groq/Notepad acceptance remains open. |
-| Encrypted failed-audio recovery | Partially Implemented | Windows DPAPI/SQLite restart, corruption, retention, expiry and memory-only private tests. Home exposes Retry/Delete; complete live microphone → timeout → retry flow awaits manual acceptance. |
+| Bounded speech deadline, exact error | Partially Implemented | Cancellation and late-result regression; delayed loopback HTTP fixture exercises the real speech client. Real slow Groq/Notepad acceptance remains open. |
+| Encrypted recording history and recovery | Partially Implemented | Windows DPAPI/SQLite restart, corruption, retention, expiry and memory-only private tests. History exposes Listen/Download/Retry/Delete; complete live microphone → timeout → retry flow awaits manual acceptance. |
 | Retry avoids old insertion target | Partially Implemented | New generation has no target/selection; recovered text is copy-only. Live target application acceptance remains open. |
 | Bounded optional AI editing | Partially Implemented | Five-second cleanup limit falls back locally; ten-second command-edit limit fails safely. Live provider timeout acceptance remains open. |
 

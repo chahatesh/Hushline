@@ -31,7 +31,11 @@ impl Store {
             ],
         )
         .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM recovery_audio WHERE created_at < ?1 OR id NOT IN (SELECT id FROM recovery_audio ORDER BY created_at DESC LIMIT ?2)", params![audio_cutoff(), crate::recovery::MAX_CLIPS]).map_err(|e| e.to_string())?;
+        prune_audio(
+            &tx,
+            crate::recovery::MAX_CLIPS,
+            crate::recovery::MAX_STORED_BYTES,
+        )?;
         tx.commit().map_err(|e| e.to_string())
     }
     pub fn saved_audios(&self) -> Result<Vec<crate::recovery::SavedAudio>> {
@@ -57,6 +61,28 @@ impl Store {
             serde_json::from_str(&metadata).map_err(|_| "Invalid saved recording.")?,
             data,
         ))
+    }
+    pub fn update_audio(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut crate::recovery::SavedAudio),
+    ) -> Result<()> {
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let metadata: String = c
+            .query_row(
+                "SELECT metadata FROM recovery_audio WHERE id=?1 AND created_at>=?2",
+                params![id, audio_cutoff()],
+                |r| r.get(0),
+            )
+            .map_err(|_| "This saved recording is no longer available.")?;
+        let mut info = serde_json::from_str(&metadata).map_err(|_| "Invalid saved recording.")?;
+        change(&mut info);
+        c.execute(
+            "UPDATE recovery_audio SET metadata=?2 WHERE id=?1",
+            params![id, serde_json::to_string(&info).map_err(|e| e.to_string())?],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
     pub fn delete_audio(&self, id: &str) -> Result<()> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
@@ -98,7 +124,7 @@ impl Store {
     pub fn insert(&self, record: &Transcript) -> Result<()> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
         c.execute(
-            "INSERT INTO history VALUES(?1,?2,?3)",
+            "INSERT INTO history VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record",
             params![
                 record.id,
                 record.created_at,
@@ -108,13 +134,36 @@ impl Store {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
-    pub fn delete(&self, id: Option<String>) -> Result<()> {
+    pub fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        match c.query_row("SELECT record FROM history WHERE id=?1", [id], |row| {
+            row.get::<_, String>(0)
+        }) {
+            Ok(record) => serde_json::from_str(&record)
+                .map(Some)
+                .map_err(|_| "Invalid history record.".into()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    pub fn delete(&self, id: Option<String>) -> Result<()> {
+        let mut c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let tx = c.transaction().map_err(|e| e.to_string())?;
+        match &id {
+            Some(id) => {
+                tx.execute("DELETE FROM recovery_audio WHERE id IN (SELECT json_extract(record,'$.audioId') FROM history WHERE id=?1)", [id]).map_err(|e| e.to_string())?;
+            }
+            None => {
+                tx.execute("DELETE FROM recovery_audio", [])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         match id {
-            Some(id) => c.execute("DELETE FROM history WHERE id=?1", [id]),
-            None => c.execute("DELETE FROM history", []),
+            Some(id) => tx.execute("DELETE FROM history WHERE id=?1", [id]),
+            None => tx.execute("DELETE FROM history", []),
         }
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -138,13 +187,111 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 }
-fn audio_cutoff() -> String {
-    (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339()
+pub(crate) fn audio_cutoff() -> String {
+    (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339()
+}
+fn prune_audio(connection: &Connection, count: usize, bytes: usize) -> Result<()> {
+    connection.execute("DELETE FROM recovery_audio WHERE created_at < ?1 OR id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) AS position, SUM(length(audio)) OVER (ORDER BY created_at DESC, id DESC) AS bytes FROM recovery_audio) WHERE position <= ?2 AND bytes <= ?3)", params![audio_cutoff(), count, bytes]).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn transcript(id: &str, audio_id: &str, text: &str) -> Transcript {
+        Transcript {
+            id: id.into(),
+            audio_id: Some(audio_id.into()),
+            text: text.into(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            app: "fixture.exe".into(),
+            words: 2,
+            duration_ms: 1000,
+            latency_ms: 30,
+            inserted: false,
+            delivery_failure: None,
+        }
+    }
+    fn audio(id: &str, created: String) -> crate::recovery::SavedAudio {
+        crate::recovery::SavedAudio {
+            id: id.into(),
+            created_at: created,
+            duration_ms: 1000,
+            requires_review: false,
+            in_memory: false,
+            status: "pending".into(),
+            transcript_id: None,
+            last_error: None,
+            attempts: 1,
+        }
+    }
+    #[test]
+    fn retries_replace_one_history_record_and_deletion_removes_linked_audio() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        store
+            .save_audio(&audio("audio", chrono::Utc::now().to_rfc3339()), &[0; 32])
+            .unwrap();
+        store
+            .insert(&transcript("result", "audio", "First result"))
+            .unwrap();
+        store
+            .insert(&transcript("result", "audio", "Retried result"))
+            .unwrap();
+        assert_eq!(store.history().unwrap().len(), 1);
+        assert_eq!(
+            store.transcript("result").unwrap().unwrap().text,
+            "Retried result"
+        );
+        store.delete(Some("result".into())).unwrap();
+        assert!(store.history().unwrap().is_empty());
+        assert!(store.saved_audios().unwrap().is_empty());
+        store
+            .save_audio(
+                &audio("unlinked failure", chrono::Utc::now().to_rfc3339()),
+                &[0; 32],
+            )
+            .unwrap();
+        store.delete(None).unwrap();
+        assert!(store.saved_audios().unwrap().is_empty());
+    }
+    #[test]
+    fn audio_limits_prune_oldest_by_count_bytes_and_age() {
+        for (count, bytes, expected) in [(3, 1000, 3), (100, 70, 2)] {
+            let store = Store::open(Path::new(":memory:")).unwrap();
+            for index in 0..5 {
+                let time = (chrono::Utc::now() - chrono::Duration::seconds(5 - index)).to_rfc3339();
+                store
+                    .save_audio(&audio(&index.to_string(), time), &[0; 32])
+                    .unwrap();
+            }
+            prune_audio(&store.0.lock().unwrap(), count, bytes).unwrap();
+            let kept = store.saved_audios().unwrap();
+            assert_eq!(kept.len(), expected);
+            assert_eq!(kept[0].id, "4");
+            assert!(kept.iter().all(|clip| clip.id != "0"));
+        }
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        store
+            .save_audio(
+                &audio(
+                    "ten days",
+                    (chrono::Utc::now() - chrono::Duration::days(10)).to_rfc3339(),
+                ),
+                &[0; 32],
+            )
+            .unwrap();
+        assert_eq!(store.saved_audios().unwrap().len(), 1);
+        store
+            .save_audio(
+                &audio(
+                    "expired",
+                    (chrono::Utc::now() - chrono::Duration::days(31)).to_rfc3339(),
+                ),
+                &[0; 32],
+            )
+            .unwrap();
+        assert_eq!(store.saved_audios().unwrap().len(), 1);
+    }
     #[test]
     fn expired_audio_cannot_be_read_and_is_removed_on_access() {
         let store = Store::open(Path::new(":memory:")).unwrap();
@@ -154,6 +301,10 @@ mod tests {
             duration_ms: 1000,
             requires_review: false,
             in_memory: false,
+            status: "failed".into(),
+            transcript_id: None,
+            last_error: None,
+            attempts: 1,
         };
         store
             .0
@@ -229,6 +380,7 @@ mod tests {
                 latency_ms: 20,
                 inserted: true,
                 delivery_failure: None,
+                audio_id: None,
             };
             s.insert(&t).unwrap();
             assert_eq!(s.history().unwrap().len(), 1);
