@@ -144,7 +144,7 @@ test('voice bar preview unfolds upward with an anchored base and respects reduce
 test('timeout preference persists and failed audio can be deleted from Home', async ({page}) => {
   await page.getByRole('button',{name:'Settings',exact:true}).click();
   await page.getByRole('tab',{name:'Dictation',exact:true}).click();
-  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('5');
+  await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('30');
   await page.getByLabel('Transcription timeout (seconds)').fill('12');
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
   await page.reload();
@@ -153,12 +153,12 @@ test('timeout preference persists and failed audio can be deleted from Home', as
   await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('12');
   await page.evaluate(()=>{const key='hushline-browser-preview-v1', data=JSON.parse(localStorage.getItem(key)!);data.savedAudio=[{id:'ui-metadata-only',createdAt:new Date().toISOString(),durationMs:8000,requiresReview:false,inMemory:true}];localStorage.setItem(key,JSON.stringify(data));});
   await page.reload();
-  await expect(page.getByRole('heading',{name:/Saved audio/})).toBeVisible();
+  await expect(page.getByRole('heading',{name:/Recordings to retry/})).toBeVisible();
   await expect(page.getByText('Memory only · lost when Hush quits')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Retry',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Retry transcription',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'Delete saved audio'}).click();
   await page.getByRole('button',{name:'Delete permanently'}).click();
-  await expect(page.getByRole('heading',{name:/Saved audio/})).toHaveCount(0);
+  await expect(page.getByRole('heading',{name:/Recordings to retry/})).toHaveCount(0);
 });
 
 

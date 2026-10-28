@@ -27,5 +27,9 @@
   "subagents": "none",
   "liveMicrophoneToField": "not performed",
   "packagedPlaybackAndDownload": "not performed",
-  "publicRelease": false
+  "publicRelease": false,
+  "headlessUiTestsPassed": 19,
+  "productionCommit": "8b0a22e666261daab1496e6f324765ca99c1eb11",
+  "optimizedBuild": "passed: final executable, NSIS installer and portable ZIP",
+  "installer": "passed: per-user silent install, background launch, notices, clean uninstall, profile retention and unrelated legacy registration/shortcuts unchanged"
 }
