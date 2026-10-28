@@ -41,6 +41,10 @@ Recording history (automated browser preview with public test notes):
 
 These are implemented code paths, not a blanket compatibility claim. Terminal automatic insertion, browser-domain styles, rich-text snippets, a signed updater, and several advanced formatting capabilities are not supported. See the feature matrix before relying on a specific workflow.
 
+## Code signing policy
+
+[Code signing policy](CODE_SIGNING_POLICY.md) · [Privacy](PRIVACY.md). Signing is **not active yet**. The planned SignPath Foundation integration verifies the application, uninstaller, installer and portable executable before signed distribution. Windows reputation warnings may still occur even with a trusted signature.
+
 ## Install
 
 Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). No public GitHub Release is available yet; acceptance verification remains required. The installer uses a unique Windows registration and “Hush Dictation” shortcuts to avoid overwriting other apps named Hush. Earlier Hushline installations may be removed normally after testing Hush; keep app data when prompted. Locally built artifacts, when generated, are in:
@@ -48,7 +52,7 @@ Source is available at [chahatesh/Hush](https://github.com/chahatesh/Hushline). 
 - `src-tauri/target/release/bundle/nsis/Hush_0.6.0_x64-setup.exe` — per-user installer with shortcuts and uninstaller.
 - `artifacts/Hush_0.6.0_x64_portable.zip` — executable plus license/readme. This uses the same Windows app-data settings; it is portable as a binary, not a fully isolated profile.
 
-The installer is unsigned unless a maintainer signs it with their own certificate. It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key, clear history, and delete saved audio in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
+Current downloads remain unsigned. Free SignPath Foundation signing is prepared but requires program approval and credentials; see the [Code signing policy](CODE_SIGNING_POLICY.md) and [activation guide](docs/SIGNING.md). It requires no administrator permissions for ordinary per-user use. WebView2 installation may be required. Ordinary updates retain app-data settings. Local history and the Groq key may remain after uninstall so an update/reinstall does not unexpectedly erase them; remove the key, clear history, and delete saved audio in the app before uninstalling if you want them deleted. Remove the remaining app-data directory yourself for complete removal. Startup is opt-in under Settings; no service is installed.
 
 ### Requirements
 

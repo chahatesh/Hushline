@@ -1,5 +1,12 @@
 # Changelog
 
+## Signing integration — unreleased
+
+- Prepare free SignPath Foundation signing with constrained app/uninstaller and outer-installer requests, trusted Authenticode/timestamp/content verification, and signed portable packaging. Enrollment and production signing remain pending.
+- Keep the functional release gate; draft releases consume only verified signed files. Standalone signing builds produce artifacts without publishing a Release. Add signing/privacy policies and an honest application draft.
+- Test real NSIS export/import and throwaway in-memory Authenticode fixtures, tamper rejection and refusal of untrusted/test signers; no Windows root trust is changed.
+
+
 ## 0.6.0 — unreleased
 
 - Protect every completed dictation recording before key lookup, network requests or text processing. Retain successful audio and expose Listen, Download WAV and Retry alongside its transcript; failed/unlinked recordings remain available in History and Home.

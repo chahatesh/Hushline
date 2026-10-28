@@ -14,7 +14,7 @@ Use your own configured signing identity if signing is enabled. No fabricated si
 
 ## Release policy
 
-Run the complete real Windows/Groq acceptance protocol in QA.md. Record actual evidence in release-verification.json; do not mark unexecuted checks as passing. Run checks and build on a clean second Windows machine. Sign installers only with an authorized certificate.
+Run the complete real Windows/Groq acceptance protocol in QA.md. Record actual evidence in release-verification.json; do not mark unexecuted checks as passing. Run checks and build on a clean second Windows machine. Windows distribution now requires the free SignPath Foundation integration described in [SIGNING.md](SIGNING.md). Enrollment/credentials and real trusted signing are still pending; no unsigned fallback can reach the release workflow.
 
 For 0.6.0, also verify the abandoned-hold/startup-ready sound, dark preparation state, release-to-insertion reliability, Casual/Standard/Formal formatting, correction/list examples, and whole-field prompt Clarify/Expand with edited preview, unchanged-target replacement, changed-target refusal, protected-field refusal, cancellation, and timeout. The prompt's 32 KB input/100 KB output limits and transient no-history behavior must remain intact. Browser tests and HTTP fixtures do not substitute for those live checks.
 

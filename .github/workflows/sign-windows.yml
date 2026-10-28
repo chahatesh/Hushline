@@ -1,0 +1,114 @@
+name: Sign Windows distribution
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  sign:
+    if: github.repository == 'chahatesh/Hushline'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check SignPath enrollment
+        env:
+          TOKEN_PRESENT: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+        shell: pwsh
+        run: |
+          if ($env:TOKEN_PRESENT -ne 'true' -or -not $env:ORGANIZATION_ID -or -not $env:PROJECT_SLUG -or -not $env:POLICY_SLUG) {
+            throw 'SignPath Foundation enrollment is not configured. Follow docs/SIGNING.md; no unsigned fallback will be published.'
+          }
+          $organization = [guid]::Empty
+          if (-not [guid]::TryParse($env:ORGANIZATION_ID, [ref]$organization)) { throw 'Invalid SignPath organization ID.' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: npm run package
+      - name: Capture application and uninstaller
+        run: powershell -NoProfile -File scripts/signpath.ps1 -Phase Prepare
+      - id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Unsupported Windows release version.' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") { throw 'Tag and application versions differ.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        id: inner
+        with:
+          name: Hush-signing-inputs
+          path: artifacts/signpath/inner-unsigned/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Sign application and uninstaller
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: windows-inner
+          github-artifact-id: ${{ steps.inner.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: artifacts/signpath/inner-signed
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+      - name: Verify payload and rebuild installer
+        run: powershell -NoProfile -File scripts/signpath.ps1 -Phase Repack
+      - uses: actions/upload-artifact@v4
+        id: installer
+        with:
+          name: Hush-installer-signing-input
+          path: artifacts/signpath/installer-unsigned/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Sign outer installer
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: windows-installer
+          github-artifact-id: ${{ steps.installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: artifacts/signpath/installer-signed
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+      - name: Verify all signatures and create signed portable build
+        run: powershell -NoProfile -File scripts/signpath.ps1 -Phase Finalize
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hush-signed-windows-x64
+          path: |
+            artifacts/signpath/release/*.exe
+            artifacts/signpath/release/*.zip
+            artifacts/signpath/release/SHA256SUMS.txt
+            artifacts/signpath/release/signing-verification.json
+          if-no-files-found: error
+          retention-days: 30

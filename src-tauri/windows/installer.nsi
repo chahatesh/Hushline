@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: MIT
 ; Tauri Apps Contributors, licensed under MIT (see TAURI-LICENSE-MIT).
-; Derived from tauri-cli-v2.12.3; only registry identity and shortcut names changed.
+; Derived from tauri-cli-v2.12.3; registry identity, shortcuts and external signing handoff changed.
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -54,7 +54,11 @@ ${StrLoc}
 !define UNINSTALLERICON "{{uninstaller_icon}}"
 !define UNINSTALLERHEADERIMAGE "{{uninstaller_header_image}}"
 !define MAINBINARYNAME "{{main_binary_name}}"
+!ifdef HUSH_SIGNED_MAIN
+!define MAINBINARYSRCPATH "${HUSH_SIGNED_MAIN}"
+!else
 !define MAINBINARYSRCPATH "{{main_binary_path}}"
+!endif
 !define BUNDLEID "{{bundle_id}}"
 !define COPYRIGHT "{{copyright}}"
 !define OUTFILE "{{out_file}}"
@@ -82,7 +86,11 @@ Var OldMainBinaryName
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
+!ifdef HUSH_OUTPUT_FILE
+OutFile "${HUSH_OUTPUT_FILE}"
+!else
 OutFile "${OUTFILE}"
+!endif
 
 ; We don't actually use this value as default install path,
 ; it's just for nsis to append the product name folder in the directory selector
@@ -101,8 +109,12 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !addplugindir "${ADDITIONALPLUGINSPATH}"
 
 ; Uninstaller signing command
+!ifdef HUSH_EXPORT_UNINSTALLER
+  !uninstfinalize 'powershell.exe -NoProfile -NonInteractive -File "${HUSH_SIGNING_HELPER}" -Phase Capture -InputFile "%1" -ArtifactDirectory "${HUSH_SIGNING_DIRECTORY}"' = 0
+!else
 !if "${UNINSTALLERSIGNCOMMAND}" != ""
   !uninstfinalize '${UNINSTALLERSIGNCOMMAND}'
+!endif
 !endif
 
 ; Handle install mode, `perUser`, `perMachine` or `both`
@@ -695,7 +707,14 @@ Section Install
   {{/each}}
 
   ; Create uninstaller
-  WriteUninstaller "$INSTDIR\uninstall.exe"
+  !ifdef HUSH_SIGNED_UNINSTALLER
+    ; Import the same uninstaller exported by the first pass. Do not regenerate
+    ; or alter it after the external service signs it (NSIS documented method).
+    SetOutPath "$INSTDIR"
+    File "/oname=uninstall.exe" "${HUSH_SIGNED_UNINSTALLER}"
+  !else
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+  !endif
 
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR

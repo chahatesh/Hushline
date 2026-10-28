@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters><parameter name="version" required="true" /></parameters>
+  <zip-file>
+    <pe-file path="hushline.exe" product-name="Hush" product-version="${version}" file-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" description="Hush" description-url="https://github.com/chahatesh/Hushline" />
+    </pe-file>
+    <pe-file path="uninstall.exe" product-name="Hush" product-version="${version}" file-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" description="Hush uninstaller" description-url="https://github.com/chahatesh/Hushline" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
