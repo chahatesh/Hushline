@@ -14,6 +14,8 @@ pub enum Action {
     Open,
     Scratchpad,
     Cancel,
+    Quick(crate::quick::QuickSelection),
+    MenuFailed,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Chord {

@@ -93,7 +93,7 @@ WASAPI device positions and discontinuity flags identify gaps after the first pa
 
 Audio-loss diagnostics use fixed timing metadata. Brief discontinuity flags alone do not disable ordinary dictation. Substantial gaps are flagged for review; ordinary dictation delivers the available speech with a notice, while interrupted Command Mode is refused. Lost audio cannot be reconstructed. Disconnected or stalled devices end capture with recoverable audio where available.
 
-The overlay tracks session generation and notice identity separately from meter readings. A single 2.5-second timer contracts expanded details to a 168×28 bottom or 40×112 side bar. The same lower dock edge stays anchored; recording and processing continue. New sessions/notices reset a deadline, so a queued timer from an earlier session cannot immediately collapse a new one. Meter updates never rearm this timer. Active bars show the waveform, timer and close control without a listening label. Bottom bars initially measure 168×32; the waveform stays centered and the time sits beside × on the right. Side bars put the timer and × below the waveform. The close control cancels even after contraction. Listening clicks stop hands-free capture, processing clicks cancel, and right-click opens the dashboard. Completion/errors return to idle within 2.5 seconds; recovery text remains in the dashboard. Idle has no timer. A class arrow cursor and WM_SETCURSOR handling prevent a stale busy cursor over the native surface.
+The overlay tracks generation and notice identity separately from meter readings. A 2.5-second deadline contracts recording details to a 168×28 bottom or 40×112 side bar without stopping capture or processing. New sessions/notices renew that deadline; meter readings do not. The timer sits left of the centered waveform and × sits right; side docks put the timer above the waveform and × below it. Listening clicks stop hands-free capture, processing clicks cancel, and right-click opens native quick controls. Errors and recovery notices remain readable for twelve seconds. A one-shot snooze timer can hide the resting widget for an hour, while active feedback remains visible. Idle has no animation loop. A class arrow cursor and WM_SETCURSOR handling prevent stale busy cursors.
 
 ## Processing deadline and recoverable audio
 
@@ -121,7 +121,7 @@ Local cleanup resolves only explicit, supported corrections and retains ambiguou
 
 ## 0.4.0 explicitly approved whole-field editing
 
-Improve prompt is initially invoked only by its configurable `shortcuts.improvePrompt` (default Ctrl+Win+P), without microphone activation. `promptImproveMode` defaults to `clarify`; `expand` permits additions only under labeled optional suggestions/assumptions. Both use the configured Command Mode model or the configured local Ollama model in offline mode, under a cancellable 20-second inference deadline. There is no cloud fallback from offline mode.
+Improve prompt is initially invoked only by its configurable `shortcuts.improvePrompt` (default Ctrl+Shift+P), without microphone activation. `promptImproveMode` defaults to `clarify`; `expand` permits additions only under labeled optional suggestions/assumptions. Both use the configured Command Mode model or the configured local Ollama model in offline mode, under a cancellable 20-second inference deadline. There is no cloud fallback from offline mode.
 
 The original field snapshot is transient. Input must be one supported, nonempty editable field and at most 32,000 UTF-8 bytes; protected/read-only inputs, terminals, oversized fields, unsupported controls, and providers exposing unrelated document content are rejected without truncation. Approved whole-field replacement uses the supported native edit/accessibility operation in one action. Whole-field replacement remains separate from ordinary dictation, which may insert at the original selection through the bounded native edit path.
 
@@ -164,3 +164,11 @@ The hook thread processes keyboard, mouse and desktop events. It recreates its l
 Groq speech attempts share the caller's bounded total wait. Each request has an attempt deadline covering connection, headers and body. Transport errors, recoverable statuses and unusable JSON responses share three total attempts. Authentication failures and long rate limits are surfaced without repeated requests. Saved audio remains available for a deliberate retry.
 
 Native notification geometry is computed from the current animated client bounds. Text is explicitly clipped above recovery buttons and the pill footer. Dashboard playback and notifications use one vertical feedback stack, with wrapping and scrollable long errors.
+
+## Quick controls and prompt previews
+
+The voice bar offers paste/copy, prompt improvement, history, settings, a one-hour widget snooze, restore, cancellation and quit. The tray shares the commands that require no editable-field target: copy, navigation, visibility, cancellation and quit. The widget uses a native popup menu created only on demand. Menu actions retain only the original window/process identity; text is read after an explicit prompt command, and paste still requires a fresh guarded target. Menus do not hold clipboard ownership.
+
+Snooze is process-local and uses one deadline timer. It hides the resting widget without changing its dock, and active recording/processing feedback remains visible. Restore is available from the tray.
+
+Prompt shortcuts bind the foreground window before queuing bounded whole-field capture. Frontend live events take precedence over older opening snapshots so completed previews cannot be replaced by stale loading state. New proposals scroll into view for editing and explicit Apply. Preference schema 7 migrates only the former default shortcut where the new chord is free; custom assignments and other settings remain intact.

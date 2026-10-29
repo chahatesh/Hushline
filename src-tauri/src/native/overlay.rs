@@ -2,6 +2,7 @@
 //! Nonactivating native overlay. No WebView, idle animation, or audio dependency.
 use crate::{
     model::{Settings, View},
+    quick::WidgetSnooze,
     shortcuts::Action,
 };
 use std::{
@@ -23,6 +24,27 @@ use windows::{
     },
 };
 const UPDATE: u32 = WM_APP + 17;
+const VISIBILITY_UPDATE: u32 = WM_APP + 20;
+static SNOOZE: Mutex<WidgetSnooze> = Mutex::new(WidgetSnooze::new());
+pub fn snooze(hidden: bool) {
+    if let Ok(mut snooze) = SNOOZE.lock() {
+        if hidden {
+            snooze.hide_hour(Instant::now());
+        } else {
+            snooze.show();
+        }
+    }
+    if let Some(bridge) = BRIDGE.get() {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(bridge.hwnd.load(Ordering::Acquire) as *mut _)),
+                VISIBILITY_UPDATE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+}
 #[cfg(test)]
 const QUERY_PAINT: u32 = WM_APP + 18;
 #[cfg(test)]
@@ -40,6 +62,7 @@ struct OverlayView {
     message: String,
     warning: String,
     recoverable: bool,
+    has_text: bool,
     level: f32,
     seconds: f32,
     dock: String,
@@ -259,7 +282,7 @@ pub fn start(tx: mpsc::Sender<Action>) -> Result<(), String> {
             Ok(hwnd) => {
                 let _ = ready.send(Ok(hwnd.0 as isize));
                 let mut msg = MSG::default();
-                while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -294,6 +317,7 @@ pub fn update(view: &View) {
                 message: view.message.clone(),
                 warning: view.warning.clone(),
                 recoverable: view.recoverable,
+                has_text: !view.last_text.is_empty(),
                 level: view.level,
                 seconds: view.seconds,
                 dock: v.dock.clone(),
@@ -571,7 +595,21 @@ unsafe fn position(hwnd: HWND, p: &Painter, animate: bool) {
     let active = view.phase != "idle" && !view.phase.is_empty();
     let compact = active && p.presentation.borrow().compact;
     let dock = dock_id(&view.dock);
-    if !active && dock == 3 {
+    let snoozed = SNOOZE
+        .lock()
+        .ok()
+        .and_then(|mut s| s.remaining(Instant::now()));
+    if let Some(remaining) = snoozed {
+        SetTimer(
+            Some(hwnd),
+            4,
+            remaining.as_millis().clamp(1, u32::MAX as u128) as u32,
+            None,
+        );
+    } else {
+        let _ = KillTimer(Some(hwnd), 4);
+    }
+    if !crate::quick::widget_visible(active, dock == 3, snoozed.is_some()) {
         let _ = ShowWindow(hwnd, SW_HIDE);
         let _ = KillTimer(Some(hwnd), 2);
         p.layout.set((active, dock, notice_id(&view), compact));
@@ -1200,7 +1238,7 @@ unsafe extern "system" fn procedure(
             let label = if active {
                 view.message.as_str()
             } else {
-                "Ready — click to dictate; right-click for settings"
+                "Ready — click to dictate; right-click for quick controls"
             };
             let title_changed = p.title.borrow().as_str() != label;
             if title_changed {
@@ -1215,7 +1253,11 @@ unsafe extern "system" fn procedure(
             LRESULT(0)
         }
         WM_TIMER => {
-            if wparam.0 == 3 {
+            if wparam.0 == 4 {
+                let _ = KillTimer(Some(hwnd), 4);
+                position(hwnd, &p, false);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            } else if wparam.0 == 3 {
                 if let Some(deadline) = p.details_deadline.get() {
                     if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
                         // A timer message already queued for an older session
@@ -1245,6 +1287,11 @@ unsafe extern "system" fn procedure(
             position(hwnd, &p, false);
             LRESULT(0)
         }
+        VISIBILITY_UPDATE => {
+            position(hwnd, &p, false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
         WM_POWERBROADCAST
             if matches!(
                 wparam.0 as u32,
@@ -1252,6 +1299,8 @@ unsafe extern "system" fn procedure(
             ) =>
         {
             super::hooks::refresh_hooks();
+            position(hwnd, &p, false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(1)
         }
         WM_LBUTTONUP => {
@@ -1297,7 +1346,17 @@ unsafe extern "system" fn procedure(
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            let _ = p.tx.send(Action::Open);
+            let view = p.view.lock().map(|v| v.clone()).unwrap_or_default();
+            let busy = matches!(view.phase.as_str(), "starting" | "listening" | "processing");
+            match super::quick_menu::show(hwnd, view.has_text, busy, p.animated) {
+                Ok(Some(selection)) => {
+                    let _ = p.tx.send(Action::Quick(selection));
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    let _ = p.tx.send(Action::MenuFailed);
+                }
+            }
             LRESULT(0)
         }
         WM_CLOSE => {

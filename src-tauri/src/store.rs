@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::model::*;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex};
 
 pub struct Store(Mutex<Connection>);
@@ -10,7 +10,7 @@ impl Store {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         conn.busy_timeout(std::time::Duration::from_secs(3))
             .map_err(|e| e.to_string())?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS recovery_audio (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, metadata TEXT NOT NULL, audio BLOB NOT NULL); PRAGMA user_version=2;").map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, record TEXT NOT NULL); CREATE INDEX IF NOT EXISTS history_recent ON history(created_at DESC); CREATE TABLE IF NOT EXISTS recovery_audio (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, metadata TEXT NOT NULL, audio BLOB NOT NULL); PRAGMA user_version=2;").map_err(|e| e.to_string())?;
         conn.execute(
             "DELETE FROM recovery_audio WHERE created_at < ?1",
             [audio_cutoff()],
@@ -121,6 +121,25 @@ impl Store {
         })
         .collect()
     }
+    pub fn last_text(&self, history_enabled: bool) -> Result<String> {
+        if !history_enabled {
+            return Ok(String::new());
+        }
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let record: Option<String> = c.query_row(
+            "SELECT record FROM history WHERE length(record)<=1000000 ORDER BY created_at DESC LIMIT 1", [], |row| row.get(0),
+        ).optional().map_err(|_| "History unavailable")?;
+        let Some(record) = record else {
+            return Ok(String::new());
+        };
+        let transcript: Transcript =
+            serde_json::from_str(&record).map_err(|_| "Invalid history record")?;
+        Ok(if transcript.text.len() <= 100_000 {
+            transcript.text
+        } else {
+            String::new()
+        })
+    }
     pub fn insert(&self, record: &Transcript) -> Result<()> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
         c.execute(
@@ -198,6 +217,25 @@ fn prune_audio(connection: &Connection, count: usize, bytes: usize) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn last_transcript_recovers_after_restart_but_never_in_private_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.sqlite");
+        {
+            let store = Store::open(&path).unwrap();
+            let mut old = transcript("old", "", "Older note");
+            old.created_at = "2026-10-27T12:00:00Z".into();
+            let mut latest = transcript("new", "", "Latest note");
+            latest.created_at = "2026-10-28T12:00:00Z".into();
+            store.insert(&latest).unwrap();
+            store.insert(&old).unwrap();
+        }
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.last_text(true).unwrap(), "Latest note");
+        assert_eq!(reopened.last_text(false).unwrap(), "");
+        reopened.delete(None).unwrap();
+        assert_eq!(reopened.last_text(true).unwrap(), "");
+    }
     fn transcript(id: &str, audio_id: &str, text: &str) -> Transcript {
         Transcript {
             id: id.into(),

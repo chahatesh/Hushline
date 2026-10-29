@@ -15,7 +15,7 @@ export interface SavedAudio { id: string; createdAt: string; durationMs: number;
 export interface StageDiagnostic { generation: number; stage: string; elapsedMs: number; outcome: string }
 export interface Snapshot { offline: OfflineStatus; settings: Settings; dictionary: Entry[]; snippets: Snippet[]; styles: Style[]; history: Transcript[]; savedAudio: SavedAudio[]; diagnostics: StageDiagnostic[]; scratchpad: string; view: View; startupEnabled: boolean }
 export interface Backup { version: number; settings: Settings; dictionary: Entry[]; snippets: Snippet[]; styles: Style[] }
-export const defaults: Settings = { preferencesVersion: 6, provider: 'groq', offlineModel: 'tiny', localTextModel: '', formatting: 'auto', dock: 'bottom', microphone: '', prepareMicrophone: true, startupDelayMs: 300, recordingCueEnabled: true, speechModel: 'whisper-large-v3-turbo', cleanupModel: 'openai/gpt-oss-20b', commandModel: 'openai/gpt-oss-120b', language: '', mode: 'clean', writingStyle: 'standard', promptImproveMode: 'clarify', enhanced: false, polishPolicy: 'never', historyEnabled: true, saveRecordings: true, contextEnabled: false, selectionPermission: false, maxSeconds: 600, transcriptionTimeoutSeconds: 30, silenceSeconds: 0, vadThreshold: .012, doubleTap: false, theme: 'system', insertion: 'clipboard', shortcuts: { push: 'Ctrl+Win', handsFree: 'Ctrl+Win+Space', command: 'Ctrl+Win+Alt', improvePrompt: 'Ctrl+Win+P', paste: 'Ctrl+Win+V', copy: 'Ctrl+Win+C', open: 'Ctrl+Win+H', scratchpad: 'Ctrl+Win+J', cancel: 'Escape' } };
+export const defaults: Settings = { preferencesVersion: 7, provider: 'groq', offlineModel: 'tiny', localTextModel: '', formatting: 'auto', dock: 'bottom', microphone: '', prepareMicrophone: true, startupDelayMs: 300, recordingCueEnabled: true, speechModel: 'whisper-large-v3-turbo', cleanupModel: 'openai/gpt-oss-20b', commandModel: 'openai/gpt-oss-120b', language: '', mode: 'clean', writingStyle: 'standard', promptImproveMode: 'clarify', enhanced: false, polishPolicy: 'never', historyEnabled: true, saveRecordings: true, contextEnabled: false, selectionPermission: false, maxSeconds: 600, transcriptionTimeoutSeconds: 30, silenceSeconds: 0, vadThreshold: .012, doubleTap: false, theme: 'system', insertion: 'clipboard', shortcuts: { push: 'Ctrl+Win', handsFree: 'Ctrl+Win+Space', command: 'Ctrl+Win+Alt', improvePrompt: 'Ctrl+Shift+P', paste: 'Ctrl+Win+V', copy: 'Ctrl+Win+C', open: 'Ctrl+Win+H', scratchpad: 'Ctrl+Win+J', cancel: 'Escape' } };
 export const emptyView: View = { phase: 'idle', stage: '', message: '', level: 0, seconds: 0, lastText: '', recoverable: false, preview: null, previewKind: '', previewId: null, original: null, hasKey: false, generation: 0, warning: '' };
 
 function shortcutIdentity(value: string) {
@@ -41,6 +41,17 @@ export function migrateSettings(stored: Partial<Settings> = {}): Settings {
   if ((stored.preferencesVersion ?? 0) < 6) {
     if (settings.transcriptionTimeoutSeconds === 5) settings.transcriptionTimeoutSeconds = 30;
     settings.preferencesVersion = 6;
+  }
+  if ((stored.preferencesVersion ?? 0) < 7) {
+    const occupied = new Set(Object.entries(settings.shortcuts).filter(([action]) => action !== 'improvePrompt').map(([, value]) => shortcutIdentity(value)));
+    const legacy = shortcutIdentity('Ctrl+Win+P');
+    const desired = shortcutIdentity('Ctrl+Shift+P');
+    if (shortcutIdentity(settings.shortcuts.improvePrompt) === legacy && !occupied.has(desired)) settings.shortcuts.improvePrompt = 'Ctrl+Shift+P';
+    else if (occupied.has(shortcutIdentity(settings.shortcuts.improvePrompt))) {
+      const available = ['Ctrl+Win+P', 'Ctrl+Win+Shift+P', ...Array.from({length:24},(_,i)=>`Ctrl+Win+F${i+1}`)].find(chord=>!occupied.has(shortcutIdentity(chord)));
+      if (available) settings.shortcuts.improvePrompt = available;
+    }
+    settings.preferencesVersion = 7;
   }
   return settings;
 }

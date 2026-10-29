@@ -7,6 +7,7 @@ mod lifecycle;
 mod model;
 mod native;
 mod offline;
+mod quick;
 mod recovery;
 mod shortcuts;
 mod store;

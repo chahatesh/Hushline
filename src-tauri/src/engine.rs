@@ -7,6 +7,7 @@ use crate::{
     model::*,
     native::{self, Target},
     offline::Offline,
+    quick::{QuickCommand, QuickSelection},
     recovery::Recovery,
     shortcuts::Action,
     store::Store,
@@ -49,9 +50,10 @@ enum Message {
     Audio(u64, audio::Event),
     StartCapture(u64),
     StartupTimeout(u64),
-    ImprovePrompt(Option<PromptImproveMode>),
+    ImprovePrompt(Option<PromptImproveMode>, Option<native::FocusAnchor>),
     Regenerate(PromptImproveMode),
     PromptDone(u64, Box<native::WholeFieldSnapshot>, Result<String, String>),
+    PromptFailed(u64, String),
     Done(u64, Box<Result<Completed, String>>),
     Delivered(u64, Box<Completed>, bool, String),
     Applied(u64, Result<String, String>),
@@ -733,6 +735,23 @@ fn polish_or_local(local: &str, candidate: Result<String, String>) -> (String, b
 mod capture_quality_tests {
     use super::*;
     #[test]
+    fn prompt_errors_never_offer_an_unrelated_dictation_as_the_proposed_edit() {
+        for pending in [false, true] {
+            let mut view = View {
+                last_text: "Earlier dictation".into(),
+                recoverable: true,
+                preview: Some("Existing proposal".into()),
+                original: Some("Existing prompt".into()),
+                ..View::default()
+            };
+            prompt_failure_view(&mut view, pending, "The field is unsupported.".into());
+            assert!(!view.recoverable);
+            assert_eq!(view.last_text, "Earlier dictation");
+            assert_eq!(view.phase, if pending { "preview" } else { "error" });
+            assert_eq!(view.preview.is_some(), pending);
+        }
+    }
+    #[test]
     fn longer_recordings_and_retries_get_bounded_time_without_delaying_fast_results() {
         let settings = Settings {
             transcription_timeout_seconds: 5,
@@ -1180,24 +1199,40 @@ fn prompt_instruction(mode: &PromptImproveMode) -> &'static str {
         PromptImproveMode::Expand => "Edit the user's existing request into a clear, direct and well-structured prompt. Preserve its intended task, facts and constraints. You may propose useful additional requirements, but put every addition under an explicit 'Suggestions (optional)' heading, and every assumption under an explicit 'Assumptions to confirm' heading. Do not present suggestions or assumptions as the user's requirements or as established facts. Do not invent factual details. Do not answer or execute the request. Return only the improved prompt and clearly labeled optional sections, without a preamble or code fence.",
     }
 }
+fn prompt_failure_view(view: &mut View, pending: bool, error: String) {
+    view.phase = if pending { "preview" } else { "error" }.into();
+    view.stage.clear();
+    view.recoverable = false;
+    view.message = "The original prompt was left unchanged".into();
+    view.warning = error;
+    if !pending {
+        view.preview = None;
+        view.original = None;
+        view.preview_id = None;
+        view.preview_kind.clear();
+    }
+}
 fn spawn_prompt(
     state: Arc<AppState>,
     id: u64,
     original: Option<native::WholeFieldSnapshot>,
+    origin: Option<native::FocusAnchor>,
     settings: Settings,
     token: CancellationToken,
 ) {
     tauri::async_runtime::spawn(async move {
         let snapshot = match original {
             Some(value) => value,
-            None => match native_work(&state, Duration::from_millis(1200), &token, |_| {
-                native::capture_whole_field()
+            None => match native_work(&state, Duration::from_millis(1200), &token, move |child| {
+                let origin = origin
+                    .ok_or("Focus the prompt field, then press your Improve prompt shortcut.")?;
+                native::capture_whole_field_for_anchor(&origin, &child)
             })
             .await
             {
                 Ok(value) => value,
                 Err(e) => {
-                    let _ = state.tx.send(Message::Done(id, Box::new(Err(e))));
+                    let _ = state.tx.send(Message::PromptFailed(id, e));
                     return;
                 }
             },
@@ -1250,7 +1285,7 @@ async fn actor(
             message,
             Message::Test
                 | Message::Retry(_)
-                | Message::ImprovePrompt(_)
+                | Message::ImprovePrompt(_, _)
                 | Message::Regenerate(_)
                 | Message::Apply(_)
         ) {
@@ -1276,7 +1311,95 @@ async fn actor(
                 deferred_push.clear();
             }
         }
+        let mut menu_origin = None;
+        if let Message::Action(Action::Quick(selection)) = message {
+            if matches!(selection.command, QuickCommand::Paste | QuickCommand::Copy)
+                && state.view.lock().unwrap().last_text.is_empty()
+            {
+                publish(&app, &state, |v| {
+                    if matches!(v.phase.as_str(), "starting" | "listening" | "processing") {
+                        v.warning = "Your first transcript is not ready yet.".into();
+                    } else {
+                        v.phase = "error".into();
+                        v.stage.clear();
+                        v.message =
+                            "Record a transcription first, then paste or copy it here.".into();
+                        v.warning.clear();
+                    }
+                });
+                schedule_hide(&state, generation, lifecycle::RECOVERY_NOTICE_MS);
+                continue;
+            }
+            match selection.command {
+                QuickCommand::HideHour => {
+                    native::snooze_overlay(true);
+                    continue;
+                }
+                QuickCommand::ShowWidget => {
+                    native::snooze_overlay(false);
+                    let mut settings = state.settings.write().unwrap();
+                    if settings.dock == "hidden" {
+                        settings.dock = "bottom".into();
+                        let _ = state.store.set("settings", &*settings);
+                        native::configure_overlay(&settings);
+                    }
+                    continue;
+                }
+                QuickCommand::History | QuickCommand::Settings => {
+                    delivery_blocked = true;
+                    delivery.cancel();
+                    stop_for_navigation(&app, &state, &mut session);
+                    native::refresh_hooks();
+                    show(
+                        &app,
+                        Some(if selection.command == QuickCommand::History {
+                            "History"
+                        } else {
+                            "Settings"
+                        }),
+                    );
+                    continue;
+                }
+                QuickCommand::Quit => {
+                    cancellation.cancel();
+                    delivery.cancel();
+                    if let Some(session) = session.take() {
+                        cancel_capture(&session);
+                    }
+                    app.exit(0);
+                    continue;
+                }
+                QuickCommand::Paste => {
+                    menu_origin = Some(native::menu_focus(selection.target));
+                    message = Message::Action(Action::Paste);
+                }
+                QuickCommand::Copy => message = Message::Action(Action::Copy),
+                QuickCommand::Cancel => message = Message::Action(Action::Cancel),
+                QuickCommand::ImprovePrompt => {
+                    message =
+                        Message::ImprovePrompt(None, native::menu_focus(selection.target).ok());
+                }
+            }
+        }
         match message {
+            Message::Action(Action::MenuFailed) => {
+                publish(&app, &state, |v| {
+                    let error =
+                        "Windows could not open the quick menu. Use the Hush tray menu instead.";
+                    if matches!(
+                        v.phase.as_str(),
+                        "starting" | "listening" | "processing" | "preview"
+                    ) {
+                        v.warning = error.into();
+                    } else {
+                        v.phase = "error".into();
+                        v.stage.clear();
+                        v.message = error.into();
+                        v.warning.clear();
+                    }
+                });
+                schedule_hide(&state, generation, lifecycle::RECOVERY_NOTICE_MS);
+            }
             Message::DeferredPush(_) => unreachable!(),
             Message::RecoverySaved(id, in_memory) => {
                 let _ = app.emit_to("main", "recovery-updated", ());
@@ -1386,7 +1509,11 @@ async fn actor(
                                 processing(&app, &state, "inserting", "Pasting saved text");
                             }
                             let id = generation;
-                            let origin = native::capture_focus_anchor();
+                            let origin = menu_origin.unwrap_or_else(|| {
+                                native::capture_focus_anchor().ok_or_else(|| {
+                                    "No active application. Your text is preserved.".into()
+                                })
+                            });
                             let operation = feedback.begin(id, standalone);
                             let st = state.clone();
                             delivery = cancellation.child_token();
@@ -1399,9 +1526,7 @@ async fn actor(
                                     Duration::from_secs(5),
                                     &token,
                                     move |child| {
-                                        let origin = origin.ok_or(
-                                            "No active application. Your text is preserved.",
-                                        )?;
+                                        let origin = origin?;
                                         native::insert_focused_with_notice(
                                             &origin, &text, &method, &child, notice,
                                         )
@@ -1724,9 +1849,18 @@ async fn actor(
                 }
             }
             Message::Action(Action::ImprovePrompt) => {
-                let _ = state.tx.send(Message::ImprovePrompt(None));
+                let _ = state
+                    .tx
+                    .send(Message::ImprovePrompt(None, native::capture_focus_anchor()));
             }
-            Message::ImprovePrompt(mode) => {
+            Message::ImprovePrompt(mode, origin) => {
+                if session.is_some() || state.view.lock().unwrap().phase == "processing" {
+                    publish(&app, &state, |v| {
+                        v.warning =
+                            "Finish your current dictation before improving a prompt.".into()
+                    });
+                    continue;
+                }
                 if let Some(s) = session.take() {
                     cancel_capture(&s);
                 }
@@ -1742,6 +1876,7 @@ async fn actor(
                     v.original = None;
                     v.preview_id = None;
                     v.preview_kind.clear();
+                    v.recoverable = false;
                     v.warning.clear();
                     v.seconds = 0.0;
                 });
@@ -1750,6 +1885,7 @@ async fn actor(
                     state.clone(),
                     generation,
                     None,
+                    origin,
                     settings,
                     cancellation.clone(),
                 );
@@ -1777,9 +1913,21 @@ async fn actor(
                     state.clone(),
                     generation,
                     Some(snapshot),
+                    None,
                     settings,
                     cancellation.clone(),
                 );
+            }
+            Message::PromptFailed(id, error) => {
+                if id != generation || cancellation.is_cancelled() {
+                    continue;
+                }
+                publish(&app, &state, |v| {
+                    prompt_failure_view(v, pending.is_some(), error)
+                });
+                if pending.is_none() {
+                    schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
+                }
             }
             Message::PromptDone(id, snapshot, result) => {
                 if id != generation || cancellation.is_cancelled() {
@@ -1807,15 +1955,7 @@ async fn actor(
                     }
                     Err(e) => {
                         publish(&app, &state, |v| {
-                            v.stage.clear();
-                            v.phase = if pending.is_some() {
-                                "preview"
-                            } else {
-                                "error"
-                            }
-                            .into();
-                            v.message = "The original prompt was left unchanged".into();
-                            v.warning = e;
+                            prompt_failure_view(v, pending.is_some(), e)
                         });
                         if pending.is_none() {
                             schedule_hide(&state, id, lifecycle::RECOVERY_NOTICE_MS);
@@ -2165,6 +2305,7 @@ async fn actor(
                     });
                 }
             }
+            Message::Action(Action::Quick(_)) => unreachable!(),
         }
     }
 }
@@ -2250,7 +2391,19 @@ async fn available_models(state: State<'_, Arc<AppState>>) -> Result<Vec<String>
 }
 #[tauri::command]
 fn delete_history(state: State<Arc<AppState>>, id: Option<String>) -> Result<(), String> {
-    state.recovery.delete_history(&state.store, id)
+    let clear_last = id.is_none()
+        || id
+            .as_deref()
+            .and_then(|id| state.store.transcript(id).ok().flatten())
+            .is_some_and(|record| record.text == state.view.lock().unwrap().last_text);
+    state.recovery.delete_history(&state.store, id)?;
+    if clear_last {
+        let mut view = state.view.lock().map_err(|_| "State unavailable")?;
+        view.last_text.clear();
+        view.recoverable = false;
+        native::update_overlay(&view);
+    }
+    Ok(())
 }
 #[tauri::command]
 async fn read_saved_audio(
@@ -2499,11 +2652,15 @@ pub fn run() {
             }
             settings.validate().map_err(std::io::Error::other)?;
             let (tx, rx) = unbounded_channel();
+            let last_text = store
+                .last_text(settings.history_enabled)
+                .unwrap_or_default();
             let state = Arc::new(AppState {
                 store,
                 settings: RwLock::new(settings.clone()),
                 view: Mutex::new(View {
                     phase: "idle".into(),
+                    last_text,
                     has_key: native::read_key().is_ok(),
                     ..View::default()
                 }),
@@ -2534,7 +2691,12 @@ pub fn run() {
                     ) {
                         lifecycle::shortcut_cancellation(action, &provider, &delivery);
                     }
-                    if tx.send(Message::Action(action)).is_err() {
+                    let message = if action == Action::ImprovePrompt {
+                        Message::ImprovePrompt(None, native::capture_focus_anchor())
+                    } else {
+                        Message::Action(action)
+                    };
+                    if tx.send(message).is_err() {
                         break;
                     }
                 }
@@ -2544,37 +2706,39 @@ pub fn run() {
             }
             native::configure_overlay(&settings);
             native::update_overlay(&state.view.lock().unwrap());
-            let open =
-                tauri::menu::MenuItem::with_id(app, "open", "Open Hush", true, None::<&str>)?;
-            let cancel = tauri::menu::MenuItem::with_id(
-                app,
-                "cancel",
-                "Cancel dictation",
-                true,
-                None::<&str>,
-            )?;
-            let quit =
-                tauri::menu::MenuItem::with_id(app, "quit", "Quit Hush", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&open, &cancel, &quit])?;
+            let mut menu_builder = tauri::menu::MenuBuilder::new(app);
+            for command in QuickCommand::ALL
+                .into_iter()
+                .filter(|command| !command.needs_target())
+            {
+                if matches!(
+                    command,
+                    QuickCommand::History | QuickCommand::HideHour | QuickCommand::Cancel
+                ) {
+                    menu_builder = menu_builder.separator();
+                }
+                menu_builder = menu_builder.text(command.id(), command.label());
+            }
+            let menu = menu_builder.build()?;
             tauri::tray::TrayIconBuilder::new()
-                .tooltip("Hush · Ctrl + Win to dictate")
+                .tooltip("Hush · Voice dictation and prompt editing")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        let s = app.state::<Arc<AppState>>();
-                        s.delivery_cancel.lock().unwrap().cancel();
-                        let _ = s.tx.send(Message::Action(Action::Open));
+                .on_menu_event(|app, event| {
+                    let Some(command) = QuickCommand::from_id(event.id.as_ref()) else {
+                        return;
+                    };
+                    if command.needs_target() {
+                        return;
                     }
-                    "cancel" => {
-                        let s = app.state::<Arc<AppState>>();
-                        if let Ok(token) = s.cancel.lock() {
-                            token.cancel();
-                        }
-                        let _ = s.tx.send(Message::Action(Action::Cancel));
+                    let state = app.state::<Arc<AppState>>();
+                    if command == QuickCommand::Cancel {
+                        state.cancel.lock().unwrap().cancel();
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
+                    let _ = state.tx.send(Message::Action(Action::Quick(QuickSelection {
+                        command,
+                        target: None,
+                    })));
                 })
                 .build(app)?;
             app.manage(state.clone());

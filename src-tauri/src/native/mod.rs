@@ -10,6 +10,8 @@ mod hooks;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod quick_menu;
+#[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 pub use clipboard::copy_text;
@@ -21,7 +23,8 @@ pub use hooks::{
 };
 #[cfg(windows)]
 pub use overlay::{
-    configure as configure_overlay, start as start_overlay, update as update_overlay,
+    configure as configure_overlay, snooze as snooze_overlay, start as start_overlay,
+    update as update_overlay,
 };
 #[cfg(windows)]
 pub use windows::*;

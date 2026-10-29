@@ -52,7 +52,7 @@ The default cloud speech model is `whisper-large-v3-turbo`; select `whisper-larg
 | Hold to dictate | Ctrl + Win |
 | Toggle hands-free | Ctrl + Win + Space |
 | Hold for Command Mode | Ctrl + Win + Alt |
-| Improve the focused prompt | Ctrl + Win + P |
+| Improve the focused prompt | Ctrl + Shift + P |
 | Paste last transcript | Ctrl + Win + V |
 | Copy last transcript | Ctrl + Win + C |
 | Open Hush | Ctrl + Win + H |
@@ -60,6 +60,8 @@ The default cloud speech model is `whisper-large-v3-turbo`; select `whisper-larg
 | Cancel | Escape |
 
 Edit these under **Settings → Shortcuts**. Optional double-tap activation preserves your preference. During hands-free recording, press and release Ctrl + Win again to finish. Hush refreshes its shortcut hooks after desktop changes, wake, or reopening the dashboard. If another app intercepts a chord, use the dedicated-key preset or choose another combination.
+
+Right-click the voice bar for **Paste last transcript**, **Copy last transcript**, **Improve prompt**, **Transcription history**, **Settings**, and **Quit Hush**. The tray menu provides copy, history, settings, and widget controls. **Hide widget for 1 hour** hides the resting bar temporarily; shortcuts and recording feedback still work. Restore it early with **Show widget** in the tray menu. Hiding it does not change your docking preference. With history enabled, Paste last transcript also recovers the latest saved result after restarting Hush; private mode starts without that recovery.
 
 ## Writing and editing
 
@@ -73,7 +75,7 @@ Choose **Always / Sometimes / Never** AI polish independently of style. Never ke
 
 A clear correction such as “I have three dogs. Wait, no, I actually have four” can become “I have four dogs.” Ambiguous corrections are preserved. Automatic AI cleanup falls back to local text if it times out or fails validation.
 
-Command Mode reads only an explicitly selected range after you enable permission. Improve prompt reads the focused editable field and offers Clarify or Expand. Both show an editable preview before replacement. Changed, protected, terminal, or unsupported fields are refused; Hush never executes dictated commands or submits messages.
+Command Mode reads only an explicitly selected range after you enable permission. To improve an existing prompt, focus its text field and press **Ctrl + Shift + P**. Hush reads that field, offers Clarify or Expand, and brings the editable proposal into view. Choose **Apply to original field** to replace it, or Copy/Cancel. Both show an editable preview before replacement. Changed, protected, terminal, or unsupported fields are refused; Hush never executes dictated commands or submits messages.
 
 ## Recordings and privacy
 

@@ -9,6 +9,7 @@
 | WASAPI capture and voice activity detection | Partially Implemented | Device frames, preparation/cancellation, and gap handling tested; broader device coverage pending. |
 | Push-to-talk, hands-free, double-tap and custom shortcuts | Partially Implemented | Routing/lifecycle regressions; physical shortcut and resume/unlock acceptance pending. |
 | Native voice bar and docking | Partially Implemented | Geometry and rendering tests; physical mixed-DPI/multi-monitor coverage pending. |
+| Native quick menu and one-hour widget snooze | Partially Implemented | Native menu construction, command/target guards and visibility deadline tests; physical menu and restored-focus acceptance pending. |
 | System-wide insertion and clipboard restoration | Partially Implemented | Owned native-control and browser fixtures; full live speech delivery and broad app compatibility pending. |
 | Protected-field, terminal, changed-focus and cancellation guards | Partially Implemented | Native/component regressions; broader accessibility-provider coverage pending. |
 | Local cleanup, clear corrections, paragraphs and lists | Implemented | English bounded rules with fact/identifier/list regressions; ambiguous wording remains conservative. |

@@ -455,6 +455,13 @@ mod tests {
                 // that prefix; this fresh action must replace it exactly once.
                 for modifier_order in [[0xa2, 0x5b], [0x5b, 0xa2]] {
                     let mut s = keys();
+                    if expected == Action::ImprovePrompt {
+                        for (chord, action) in &mut s.bindings {
+                            if *action == expected {
+                                *chord = shortcuts::parse("Ctrl+Win+P").unwrap();
+                            }
+                        }
+                    }
                     assert!(s.route(modifier_order[0], true, recording).1.is_empty());
                     assert_eq!(
                         s.route(modifier_order[1], true, recording).1,
@@ -487,6 +494,24 @@ mod tests {
         assert!(s.route(0xa2, true, true).1.is_empty());
         assert_eq!(s.route(0xa2, false, true).1, vec![Action::Release]);
         assert!(s.route(0x5b, false, false).1.is_empty());
+    }
+    #[test]
+    fn prompt_shortcut_never_starts_a_microphone_or_opens_the_dashboard() {
+        for modifiers in [[0xa2, 0xa0], [0xa1, 0xa3]] {
+            let mut s = keys();
+            for key in modifiers {
+                assert!(s.route(key, true, false).1.is_empty());
+            }
+            assert_eq!(
+                s.route(0x50, true, false),
+                (true, vec![Action::ImprovePrompt])
+            );
+            assert!(s.route(0x50, true, false).1.is_empty());
+            assert!(s.route(0x50, false, false).1.is_empty());
+            for key in modifiers {
+                assert!(s.route(key, false, false).1.is_empty());
+            }
+        }
     }
     #[test]
     fn idle_escape_passes_through_and_active_escape_cancels() {

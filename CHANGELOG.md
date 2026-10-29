@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2 — 2026-10-28
+
+- Restore the latest saved transcript for Paste last after restart when history is enabled. Private mode skips recovery, and history deletion clears the cached result.
+
+- Set Improve prompt to Ctrl+Shift+P, migrate the former default safely, and preserve custom shortcuts.
+- Bind prompt capture to its original application; keep new prompt actions from discarding in-flight dictation.
+- Keep completed previews when an older dashboard snapshot arrives, and bring proposals into view for editing and Apply.
+- Add a native voice-bar menu for paste/copy, prompt improvement, history, settings, one-hour widget hiding, restore, cancel, and quit. The tray also offers copy, history, settings, and widget controls. Recording feedback remains visible while the resting widget is hidden.
+
+
 ## 0.6.1 — 2026-10-28
 
 - Refresh shortcut hooks on dashboard open, desktop switches and Windows resume; clear stale held-key state.

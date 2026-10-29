@@ -76,7 +76,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            preferences_version: 6,
+            preferences_version: 7,
             provider: "groq".into(),
             offline_model: "tiny".into(),
             local_text_model: String::new(),
@@ -113,7 +113,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn migrate(&mut self) -> bool {
-        if self.preferences_version >= 6 {
+        if self.preferences_version >= 7 {
             return false;
         }
         if self.preferences_version < 5 {
@@ -160,10 +160,38 @@ impl Settings {
         }
         // Replace the former five-second default, which could expire before
         // connection setup/retries. Preserve all other explicit timeout values.
-        if self.transcription_timeout_seconds == 5 {
+        if self.preferences_version < 6 && self.transcription_timeout_seconds == 5 {
             self.transcription_timeout_seconds = 30;
         }
-        self.preferences_version = 6;
+        let legacy_prompt = crate::shortcuts::parse("Ctrl+Win+P").unwrap();
+        let desired_prompt = crate::shortcuts::parse("Ctrl+Shift+P").unwrap();
+        if crate::shortcuts::parse(&self.shortcuts.improve_prompt).is_ok_and(|c| c == legacy_prompt)
+            && !crate::shortcuts::bindings(&self.shortcuts)
+                .into_iter()
+                .filter(|(_, action)| *action != crate::shortcuts::Action::ImprovePrompt)
+                .any(|(chord, _)| crate::shortcuts::parse(chord).is_ok_and(|c| c == desired_prompt))
+        {
+            self.shortcuts.improve_prompt = "Ctrl+Shift+P".into();
+        }
+        let occupied: Vec<_> = crate::shortcuts::bindings(&self.shortcuts)
+            .into_iter()
+            .filter(|(_, action)| *action != crate::shortcuts::Action::ImprovePrompt)
+            .filter_map(|(chord, _)| crate::shortcuts::parse(chord).ok())
+            .collect();
+        if crate::shortcuts::parse(&self.shortcuts.improve_prompt)
+            .is_ok_and(|c| occupied.contains(&c))
+        {
+            for candidate in ["Ctrl+Win+P".to_string(), "Ctrl+Win+Shift+P".to_string()]
+                .into_iter()
+                .chain((1..=24).map(|n| format!("Ctrl+Win+F{n}")))
+            {
+                if crate::shortcuts::parse(&candidate).is_ok_and(|c| !occupied.contains(&c)) {
+                    self.shortcuts.improve_prompt = candidate;
+                    break;
+                }
+            }
+        }
+        self.preferences_version = 7;
         true
     }
     pub fn validate(&self) -> Result<(), String> {
@@ -241,7 +269,7 @@ impl Default for Shortcuts {
             push: "Ctrl+Win".into(),
             hands_free: "Ctrl+Win+Space".into(),
             command: "Ctrl+Win+Alt".into(),
-            improve_prompt: "Ctrl+Win+P".into(),
+            improve_prompt: "Ctrl+Shift+P".into(),
             paste: "Ctrl+Win+V".into(),
             copy: "Ctrl+Win+C".into(),
             open: "Ctrl+Win+H".into(),
@@ -349,6 +377,33 @@ pub struct StageDiagnostic {
 mod tests {
     use super::*;
     #[test]
+    fn prompt_shortcut_upgrade_preserves_custom_bindings_and_avoids_collisions() {
+        let mut old = Settings {
+            preferences_version: 6,
+            ..Settings::default()
+        };
+        old.shortcuts.improve_prompt = "Win+Ctrl+P".into();
+        assert!(old.migrate());
+        assert_eq!(old.shortcuts.improve_prompt, "Ctrl+Shift+P");
+        assert!(!old.migrate());
+        let mut custom = Settings {
+            preferences_version: 6,
+            ..Settings::default()
+        };
+        custom.shortcuts.improve_prompt = "Ctrl+Alt+R".into();
+        custom.migrate();
+        assert_eq!(custom.shortcuts.improve_prompt, "Ctrl+Alt+R");
+        let mut collision = Settings {
+            preferences_version: 6,
+            ..Settings::default()
+        };
+        collision.shortcuts.improve_prompt = "Ctrl+Win+P".into();
+        collision.shortcuts.open = "Shift+Ctrl+P".into();
+        collision.migrate();
+        assert_eq!(collision.shortcuts.improve_prompt, "Ctrl+Win+P");
+        assert!(collision.validate().is_ok());
+    }
+    #[test]
     fn old_history_without_delivery_metadata_still_loads() {
         let old = serde_json::json!({"id":"public", "text":"Public fixture", "createdAt":"2026", "app":"fixture", "words":2, "durationMs":100, "latencyMs":20, "inserted":false});
         let record: Transcript = serde_json::from_value(old).unwrap();
@@ -371,7 +426,7 @@ mod tests {
                 ..Settings::default()
             };
             assert!(settings.migrate());
-            assert_eq!(settings.preferences_version, 6);
+            assert_eq!(settings.preferences_version, 7);
             assert_eq!(settings.writing_style, WritingStyle::Casual);
             assert!(!settings.history_enabled);
             assert!(settings.double_tap);
@@ -422,7 +477,7 @@ mod tests {
                 assert!(!s.history_enabled);
                 assert_eq!(s.transcription_timeout_seconds, 12);
                 assert_eq!(s.shortcuts.push, "Ctrl+Alt+R");
-                assert_eq!(s.shortcuts.improve_prompt, "Ctrl+Win+P");
+                assert_eq!(s.shortcuts.improve_prompt, "Ctrl+Shift+P");
                 assert_eq!(s.startup_delay_ms, 300);
                 assert!(s.recording_cue_enabled);
                 assert_eq!(s.prompt_improve_mode, PromptImproveMode::Clarify);
@@ -462,10 +517,10 @@ mod tests {
             preferences_version: 4,
             ..Settings::default()
         };
-        s.shortcuts.open = "Win+Ctrl+P".into();
+        s.shortcuts.open = "Shift+Ctrl+P".into();
         s.shortcuts.copy = "Ctrl+Win+Shift+P".into();
         assert!(s.migrate());
-        assert_eq!(s.shortcuts.open, "Win+Ctrl+P");
+        assert_eq!(s.shortcuts.open, "Shift+Ctrl+P");
         assert_eq!(s.shortcuts.copy, "Ctrl+Win+Shift+P");
         assert_eq!(s.shortcuts.improve_prompt, "Ctrl+Win+F1");
         assert!(s.validate().is_ok());

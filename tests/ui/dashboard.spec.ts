@@ -1,6 +1,43 @@
 // SPDX-License-Identifier: MIT
 // UI behavior only. These tests do not claim native/Groq end-to-end acceptance.
 import { test, expect } from '@playwright/test';
+import { defaults, emptyView } from '../../src/types';
+
+test('a prompt preview survives an older opening snapshot and can be edited before Apply', async ({page}) => {
+  const fixture = {settings:defaults,view:{...emptyView,phase:'processing',stage:'prompt_editing',generation:3},dictionary:[],snippets:[],styles:[],history:[],savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+  await page.addInitScript(({fixture}) => {
+    const host = window as unknown as Record<string, unknown>;
+    host.isTauri = true;
+    let next = 0, snapshots = 0;
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, number>();
+    const preview = {...fixture.view,phase:'preview',stage:'',previewId:'public-preview',previewKind:'prompt',original:'Help me plan a meeting',preview:'Plan a meeting with a clear agenda.',message:'Review your improved prompt'};
+    host.__TAURI_EVENT_PLUGIN_INTERNALS__ = {unregisterListener:()=>{}};
+    host.__TAURI_INTERNALS__ = {
+      transformCallback: (callback: (event: unknown)=>void) => {callbacks.set(++next,callback);return next;},
+      invoke: async (command: string, args: Record<string, unknown>) => {
+        if (command === 'plugin:event|listen') {listeners.set(String(args.event),Number(args.handler));return args.handler;}
+        if (command === 'snapshot') {
+          if (++snapshots > 1) return {...fixture,view:preview};
+          return new Promise(resolve => setTimeout(() => {
+            callbacks.get(listeners.get('dictation')!)?.({event:'dictation',id:1,payload:preview});
+            setTimeout(()=>resolve(fixture),100);
+          },50));
+        }
+        if (command === 'apply_preview') {host.__APPLIED_PROMPT__=args;return;}
+      },
+    };
+  }, {fixture});
+  await page.reload();
+  await expect(page.locator('.review-panel')).toBeVisible();
+  const proposal = page.locator('.review-panel textarea');
+  await expect(proposal).toHaveValue('Plan a meeting with a clear agenda.');
+  await expect(proposal).toBeFocused();
+  expect(await page.evaluate(()=>('__APPLIED_PROMPT__' in window))).toBe(false);
+  await proposal.fill('Plan a meeting with an agenda and a clear outcome.');
+  await page.getByRole('button',{name:'Apply to original field',exact:true}).click();
+  expect(await page.evaluate(()=>(window as unknown as {__APPLIED_PROMPT__:unknown}).__APPLIED_PROMPT__)).toEqual({previewId:'public-preview',text:'Plan a meeting with an agenda and a clear outcome.'});
+});
 
 test('long error notifications wrap, retain dismiss controls and stack above playback', async ({page}) => {
   await page.getByRole('button', {name:'Scratchpad', exact:true}).click();
@@ -237,11 +274,11 @@ test('startup cue, preparation pause, and whole-field prompt action persist', as
   await page.getByRole('switch', {name:'Play a sound when recording starts'}).uncheck();
   await page.getByRole('group', {name:'Prompt improvement action'}).getByRole('button', {name:/Expand/}).click();
   await page.getByRole('tab', {name:'Shortcuts',exact:true}).click();
-  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Win+P');
-  await page.getByLabel('Improve prompt · whole field', {exact:true}).fill('Ctrl+Shift+P');
+  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Shift+P');
+  await page.getByLabel('Improve prompt · whole field', {exact:true}).fill('Ctrl+Alt+P');
   await page.getByRole('button', {name:'Save settings',exact:true}).click();
   await page.reload();
-  await expect(page.locator('.prompt-help .keys')).toContainText('Shift');
+  await expect(page.locator('.prompt-help .keys')).toContainText('Alt');
   await expect(page.getByText('Hush reads the whole field and previews an editable expanded version.', {exact:false})).toBeVisible();
   await page.getByRole('button', {name:'Settings',exact:true}).click();
   await page.getByRole('tab', {name:'Dictation',exact:true}).click();
@@ -275,7 +312,7 @@ test('old polished profile upgrades without losing double tap or AI policy', asy
   await expect(page.getByRole('switch', {name:'Double-tap for hands-free'})).toBeChecked();
   await expect(page.getByLabel('Transcription timeout (seconds)')).toHaveValue('18');
   await page.getByRole('tab', {name:'Shortcuts',exact:true}).click();
-  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Win+P');
+  await expect(page.getByLabel('Improve prompt · whole field', {exact:true})).toHaveValue('Ctrl+Shift+P');
 });
 
 test('recording history shows linked audio and failed recordings without simulating native playback', async ({page}) => {

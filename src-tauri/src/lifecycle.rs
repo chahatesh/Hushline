@@ -127,6 +127,13 @@ pub fn native_outcome<T>(result: &Result<T, String>) -> &'static str {
 }
 pub fn aborts_processing(action: Action) -> bool {
     action == Action::Cancel
+        || matches!(
+            action,
+            Action::Quick(crate::quick::QuickSelection {
+                command: crate::quick::QuickCommand::Cancel,
+                ..
+            })
+        )
 }
 pub fn shortcut_cancellation(
     action: Action,
@@ -145,14 +152,22 @@ pub fn finish_current_before_recording(phase: &str, stopping: bool, action: Acti
         && matches!(action, Action::Push | Action::HandsFree | Action::Command)
 }
 pub fn blocks_delivery(action: Action) -> bool {
+    // The actor cancels delivery only after accepting a prompt action. A prompt
+    // refused during recording/processing must leave the dictation job intact.
+    if let Action::Quick(selection) = action {
+        return matches!(
+            selection.command,
+            crate::quick::QuickCommand::Paste
+                | crate::quick::QuickCommand::History
+                | crate::quick::QuickCommand::Settings
+                | crate::quick::QuickCommand::Copy
+                | crate::quick::QuickCommand::Cancel
+                | crate::quick::QuickCommand::Quit
+        );
+    }
     matches!(
         action,
-        Action::Cancel
-            | Action::Open
-            | Action::Scratchpad
-            | Action::Copy
-            | Action::Paste
-            | Action::ImprovePrompt
+        Action::Cancel | Action::Open | Action::Scratchpad | Action::Copy | Action::Paste
     )
 }
 pub fn may_start(held: bool, hands_free: bool) -> bool {
@@ -240,6 +255,30 @@ impl PushGate {
 mod tests {
     use super::*;
     #[test]
+    fn quick_controls_preserve_transcription_and_hide_does_not_cancel_it() {
+        use crate::quick::{QuickCommand, QuickSelection};
+        use tokio_util::sync::CancellationToken;
+        for command in QuickCommand::ALL {
+            let provider = CancellationToken::new();
+            let delivery = provider.child_token();
+            shortcut_cancellation(
+                Action::Quick(QuickSelection {
+                    command,
+                    target: None,
+                }),
+                &provider,
+                &delivery,
+            );
+            assert_eq!(provider.is_cancelled(), command == QuickCommand::Cancel);
+            if matches!(
+                command,
+                QuickCommand::HideHour | QuickCommand::ShowWidget | QuickCommand::ImprovePrompt
+            ) {
+                assert!(!delivery.is_cancelled());
+            }
+        }
+    }
+    #[test]
     fn shortcut_prefixes_and_repeated_recording_cannot_cancel_transcription() {
         use tokio_util::sync::CancellationToken;
         for action in [
@@ -247,6 +286,7 @@ mod tests {
             Action::Release,
             Action::HandsFree,
             Action::Command,
+            Action::ImprovePrompt,
         ] {
             let provider = CancellationToken::new();
             let delivery = provider.child_token();
@@ -265,7 +305,6 @@ mod tests {
             Action::Open,
             Action::Scratchpad,
             Action::Paste,
-            Action::ImprovePrompt,
         ] {
             let provider = CancellationToken::new();
             let delivery = provider.child_token();

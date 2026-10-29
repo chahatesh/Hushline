@@ -416,6 +416,47 @@ pub fn capture_whole_field() -> Result<WholeFieldSnapshot> {
     }
     Ok(WholeFieldSnapshot { target, original })
 }
+pub fn capture_whole_field_for_anchor(
+    anchor: &FocusAnchor,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<WholeFieldSnapshot> {
+    check_focus_anchor(anchor, cancel)?;
+    let snapshot = capture_whole_field()?;
+    check_focus_anchor(anchor, cancel)?;
+    if snapshot.target.hwnd != anchor.hwnd {
+        return Err(
+            "The original prompt field is no longer active. Focus it and try again.".into(),
+        );
+    }
+    Ok(snapshot)
+}
+pub fn menu_focus(target: Option<crate::quick::MenuTarget>) -> Result<FocusAnchor> {
+    let expected = target.ok_or("Focus your text field and use its shortcut. The menu could not identify an editable application.")?;
+    capture_focus_anchor().filter(|a| expected.matches(a.hwnd, a.pid))
+        .ok_or_else(|| "The original application is no longer active. Your text is preserved; focus the field and try again.".into())
+}
+pub fn restore_menu_target(target: crate::quick::MenuTarget) -> bool {
+    unsafe {
+        let current = GetForegroundWindow();
+        let mut current_pid = 0;
+        GetWindowThreadProcessId(current, Some(&mut current_pid));
+        if current_pid != GetCurrentProcessId() && !target.matches(current.0 as isize, current_pid)
+        {
+            return false;
+        }
+        let original = HWND(target.hwnd as *mut _);
+        let mut original_pid = 0;
+        GetWindowThreadProcessId(original, Some(&mut original_pid));
+        if !IsWindow(Some(original)).as_bool() || !target.matches(original.0 as isize, original_pid)
+        {
+            return false;
+        }
+        if current != original {
+            let _ = SetForegroundWindow(original);
+        }
+        GetForegroundWindow() == original
+    }
+}
 
 fn same_field(a: &Target, b: &Target) -> bool {
     a.hwnd == b.hwnd && !a.runtime.is_empty() && a.runtime == b.runtime && !b.terminal
@@ -999,5 +1040,21 @@ mod tests {
         assert!(check_replacement_text(&"🐕".repeat(25_000)).is_ok());
         assert!(check_replacement_text(&"🐕".repeat(25_001)).is_err());
         assert!(check_replacement_text(" \n\t").is_err());
+    }
+    #[test]
+    fn missing_or_cancelled_prompt_targets_never_read_a_field() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let target = FocusAnchor {
+            hwnd: 0,
+            pid: 0,
+            epoch: 0,
+        };
+        assert!(menu_focus(None).is_err());
+        assert!(menu_focus(Some(crate::quick::MenuTarget { hwnd: 0, pid: 0 })).is_err());
+        token.cancel();
+        assert_eq!(
+            capture_whole_field_for_anchor(&target, &token).unwrap_err(),
+            "Cancelled"
+        );
     }
 }
