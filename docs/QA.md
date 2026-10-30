@@ -20,6 +20,8 @@ The ordinary test suite uses dummy keys and synthetic local HTTP/audio fixtures.
 
 Windows CI also tests a real offline CPU transcription fixture, builds the installer and portable ZIP, and exercises the external-signing packaging path. Signing tests use a temporary untrusted certificate without installing a trusted root. Their files are excluded from distribution artifacts.
 
+Regression fixtures cover text history beyond 1,000 records and older years, migration/restart, retries without double counting, cache/deletion behavior, exact 10,000-word boundaries, leap years, local dates, streaks, chart ranges, pagination/search/export, transient prompt drafts, editing preferences and explicit preview approval. Keyword-derived profiles are deterministic estimates; mock provider responses do not establish live prompt quality.
+
 ## Interactive compatibility checks
 
 Device, desktop, credential, and live-provider tests are explicitly ignored in the default Rust suite. Their test annotations describe side effects. Run them individually on an interactive Windows desktop, with a disposable field and clipboard contents, after reading those annotations.

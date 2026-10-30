@@ -343,6 +343,7 @@ pub struct View {
     pub original: Option<String>,
     pub preview_id: Option<String>,
     pub preview_kind: String,
+    pub prompt_guidance: String,
     pub has_key: bool,
     pub generation: u64,
     pub warning: String,
@@ -351,6 +352,7 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub history_summary: crate::store::HistorySummary,
     pub diagnostics: Vec<StageDiagnostic>,
     pub saved_audio: Vec<crate::recovery::SavedAudio>,
     pub offline: crate::offline::Status,

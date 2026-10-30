@@ -1,9 +1,35 @@
 // SPDX-License-Identifier: MIT
 use crate::model::*;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
-pub struct Store(Mutex<Connection>);
+pub struct Store(Mutex<Connection>, PathBuf, Mutex<()>);
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySummary {
+    pub count: u64,
+    pub words: u64,
+    pub revision: u64,
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPage {
+    pub records: Vec<Transcript>,
+    pub total: u64,
+    pub offset: u64,
+    pub revision: u64,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InsightCache {
+    version: u32,
+    revision: u64,
+    timezone_offset: i32,
+    data: crate::insights::Statistics,
+}
 type Result<T> = std::result::Result<T, String>;
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -16,7 +42,22 @@ impl Store {
             [audio_cutoff()],
         )
         .map_err(|e| e.to_string())?;
-        Ok(Self(Mutex::new(conn)))
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS history_totals (singleton INTEGER PRIMARY KEY CHECK(singleton=1), count INTEGER NOT NULL, words INTEGER NOT NULL, revision INTEGER NOT NULL);").map_err(|e|e.to_string())?;
+        let initialized: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM history_totals WHERE singleton=1)",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !initialized {
+            conn.execute("INSERT INTO history_totals SELECT 1,count(*),coalesce(sum(CASE WHEN json_valid(record) THEN coalesce(json_extract(record,'$.words'),0) ELSE 0 END),0),0 FROM history",[]).map_err(|e|e.to_string())?;
+        }
+        conn.execute_batch("CREATE TRIGGER IF NOT EXISTS history_added AFTER INSERT ON history BEGIN UPDATE history_totals SET count=count+1,words=words+coalesce(json_extract(new.record,'$.words'),0),revision=revision+1; END;
+            CREATE TRIGGER IF NOT EXISTS history_edited AFTER UPDATE ON history BEGIN UPDATE history_totals SET words=words-(CASE WHEN json_valid(old.record) THEN coalesce(json_extract(old.record,'$.words'),0) ELSE 0 END)+coalesce(json_extract(new.record,'$.words'),0),revision=revision+1; END;
+            CREATE TRIGGER IF NOT EXISTS history_removed AFTER DELETE ON history BEGIN UPDATE history_totals SET count=count-1,words=words-(CASE WHEN json_valid(old.record) THEN coalesce(json_extract(old.record,'$.words'),0) ELSE 0 END),revision=revision+1; END;
+            PRAGMA user_version=3;").map_err(|e|e.to_string())?;
+        Ok(Self(Mutex::new(conn), path.to_path_buf(), Mutex::new(())))
     }
     pub fn save_audio(&self, info: &crate::recovery::SavedAudio, data: &[u8]) -> Result<()> {
         let mut c = self.0.lock().map_err(|_| "Storage unavailable")?;
@@ -111,7 +152,7 @@ impl Store {
     pub fn history(&self) -> Result<Vec<Transcript>> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
         let mut stmt = c
-            .prepare("SELECT record FROM history ORDER BY created_at DESC LIMIT 1000")
+            .prepare("SELECT record FROM history ORDER BY created_at DESC,id DESC LIMIT 50")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
@@ -120,6 +161,93 @@ impl Store {
             serde_json::from_str(&r.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
         })
         .collect()
+    }
+    pub fn summary(&self) -> Result<HistorySummary> {
+        summary(&*self.0.lock().map_err(|_| "Storage unavailable")?)
+    }
+    pub fn history_page(&self, query: &str, offset: u64, limit: u32) -> Result<HistoryPage> {
+        if query.len() > 512 || !(1..=100).contains(&limit) || offset > i64::MAX as u64 {
+            return Err("Invalid history request.".into());
+        }
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+        let filter = "(?1='' OR instr(lower(coalesce(json_extract(record,'$.text'),'') || ' ' || coalesce(json_extract(record,'$.app'),'')),lower(?1))>0)";
+        let total = tx
+            .query_row(
+                &format!("SELECT count(*) FROM history WHERE {filter}"),
+                [query],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let mut stmt = tx.prepare(&format!("SELECT record FROM history WHERE {filter} ORDER BY created_at DESC,id DESC LIMIT ?2 OFFSET ?3")).map_err(|e|e.to_string())?;
+        let rows = stmt
+            .query_map(params![query, limit, offset as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let records = rows
+            .map(|row| {
+                serde_json::from_str(&row.map_err(|e| e.to_string())?)
+                    .map_err(|_| "Invalid history record.".into())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(HistoryPage {
+            records,
+            total,
+            offset,
+            revision: summary(&tx)?.revision,
+        })
+    }
+    /// Separate read connection/WAL snapshot: scanning old history cannot hold up
+    /// the recording actor's settings reads or a newly completed dictation.
+    pub fn statistics(&self) -> Result<crate::insights::Statistics> {
+        let _job = self.2.lock().map_err(|_| "Statistics unavailable")?;
+        let revision = self.summary()?.revision;
+        let offset = chrono::Local::now().offset().local_minus_utc();
+        if let Some(cache) = self
+            .get::<Option<InsightCache>>("insights_cache")
+            .unwrap_or(None)
+        {
+            if cache.version == crate::insights::CACHE_VERSION
+                && cache.revision == revision
+                && cache.timezone_offset == offset
+            {
+                return Ok(cache.data);
+            }
+        }
+        let (revision, data) = if self.1 == Path::new(":memory:") {
+            collect_statistics(&*self.0.lock().map_err(|_| "Storage unavailable")?)?
+        } else {
+            let conn = Connection::open_with_flags(
+                &self.1,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(|_| "History unavailable")?;
+            conn.busy_timeout(std::time::Duration::from_secs(3))
+                .map_err(|e| e.to_string())?;
+            collect_statistics(&conn)?
+        };
+        let cache = InsightCache {
+            version: crate::insights::CACHE_VERSION,
+            revision,
+            timezone_offset: offset,
+            data,
+        };
+        let json = serde_json::to_string(&cache).map_err(|e| e.to_string())?;
+        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        if summary(&c)?.revision == revision {
+            c.execute("INSERT INTO config VALUES('insights_cache',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|e|e.to_string())?;
+            c.execute("INSERT INTO config VALUES('profile_milestone',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[(cache.data.total.words / crate::insights::PROFILE_WORDS).to_string()]).map_err(|e|e.to_string())?;
+        }
+        Ok(cache.data)
+    }
+    pub fn profile_due(&self) -> bool {
+        self.summary().is_ok_and(|summary| {
+            summary.words >= crate::insights::PROFILE_WORDS
+                && self.get::<Option<u64>>("profile_milestone").ok().flatten()
+                    != Some(summary.words / crate::insights::PROFILE_WORDS)
+        })
     }
     pub fn last_text(&self, history_enabled: bool) -> Result<String> {
         if !history_enabled {
@@ -141,17 +269,34 @@ impl Store {
         })
     }
     pub fn insert(&self, record: &Transcript) -> Result<()> {
-        let c = self.0.lock().map_err(|_| "Storage unavailable")?;
-        c.execute(
+        let mut c = self.0.lock().map_err(|_| "Storage unavailable")?;
+        let tx = c.transaction().map_err(|e| e.to_string())?;
+        // Count from the final saved text, including on a retry.
+        let mut record = record.clone();
+        record.words = record.text.split_whitespace().count() as u32;
+        let existing: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM history WHERE id=?1)",
+                [&record.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        tx.execute(
             "INSERT INTO history VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record",
             params![
                 record.id,
                 record.created_at,
-                serde_json::to_string(record).map_err(|e| e.to_string())?
+                serde_json::to_string(&record).map_err(|e| e.to_string())?
             ],
         )
         .map_err(|e| e.to_string())?;
-        Ok(())
+        tx.execute("DELETE FROM config WHERE key='insights_cache'", [])
+            .map_err(|e| e.to_string())?;
+        if existing {
+            tx.execute("DELETE FROM config WHERE key='profile_milestone'", [])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
     pub fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
         let c = self.0.lock().map_err(|_| "Storage unavailable")?;
@@ -182,6 +327,11 @@ impl Store {
             None => tx.execute("DELETE FROM history", []),
         }
         .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM config WHERE key IN ('insights_cache','profile_milestone')",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|e| e.to_string())?;
@@ -206,6 +356,36 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 }
+fn summary(c: &Connection) -> Result<HistorySummary> {
+    c.query_row(
+        "SELECT count,words,revision FROM history_totals WHERE singleton=1",
+        [],
+        |r| {
+            Ok(HistorySummary {
+                count: r.get(0)?,
+                words: r.get(1)?,
+                revision: r.get(2)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+fn collect_statistics(c: &Connection) -> Result<(u64, crate::insights::Statistics)> {
+    let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+    let revision = summary(&tx)?.revision;
+    let mut builder = crate::insights::Builder::default();
+    let mut stmt = tx.prepare("SELECT CASE WHEN length(record)<=1000000 THEN record ELSE '' END FROM history ORDER BY julianday(created_at) ASC,id ASC").map_err(|e|e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        match serde_json::from_str::<Transcript>(&row.map_err(|e| e.to_string())?) {
+            Ok(record) => builder.push(&record),
+            Err(_) => builder.skip(),
+        }
+    }
+    Ok((revision, builder.finish()))
+}
 pub(crate) fn audio_cutoff() -> String {
     (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339()
 }
@@ -217,6 +397,96 @@ fn prune_audio(connection: &Connection, count: usize, bytes: usize) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_time_paging_search_profiles_and_retries_survive_restart_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("all-time.sqlite");
+        {
+            let store = Store::open(&path).unwrap();
+            for index in 0..1105 {
+                let mut record = transcript(
+                    &format!("record-{index:04}"),
+                    "",
+                    "code prompt notes plan write test task model app api",
+                );
+                record.created_at = format!("2019-01-02T12:{:02}:{:02}Z", index / 60, index % 60);
+                store.insert(&record).unwrap();
+            }
+            let summary = store.summary().unwrap();
+            assert_eq!(summary.count, 1105);
+            assert_eq!(summary.words, 11050);
+            assert!(store.profile_due());
+            let stats = store.statistics().unwrap();
+            assert_eq!(stats.total.recordings, 1105);
+            assert_eq!(stats.total.words, 11050);
+            assert_eq!(stats.profiles.len(), 1);
+            assert!(!store.profile_due());
+            assert_eq!(store.history().unwrap().len(), 50);
+            let old = store.history_page("", 1100, 50).unwrap();
+            assert_eq!(old.records.len(), 5);
+            assert_eq!(old.total, 1105);
+            assert_eq!(old.records.last().unwrap().id, "record-0000");
+            assert_eq!(store.history_page("prompt", 0, 50).unwrap().total, 1105);
+            assert_eq!(store.history_page("%", 0, 50).unwrap().total, 0);
+            assert!(store.history_page("", 0, 101).is_err());
+        }
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.statistics().unwrap().profiles.len(), 1);
+        let mut retried = reopened.transcript("record-0000").unwrap().unwrap();
+        retried.text = "A corrected prompt".into();
+        reopened.insert(&retried).unwrap();
+        assert_eq!(reopened.summary().unwrap().count, 1105);
+        assert_eq!(reopened.summary().unwrap().words, 11043);
+        assert_eq!(reopened.statistics().unwrap().total.words, 11043);
+        reopened.delete(Some("record-0001".into())).unwrap();
+        assert_eq!(reopened.statistics().unwrap().total.words, 11033);
+        reopened.delete(None).unwrap();
+        let empty = reopened.statistics().unwrap();
+        assert_eq!(empty.total.recordings, 0);
+        assert!(empty.profiles.is_empty());
+        assert!(empty.topics.is_empty());
+        assert!(reopened
+            .history_page("", 0, 100)
+            .unwrap()
+            .records
+            .is_empty());
+    }
+    #[test]
+    fn legacy_history_migrates_without_expiration_or_exposing_text_in_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch("CREATE TABLE history(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,record TEXT NOT NULL)").unwrap();
+            let record = transcript("legacy", "", "Private original sentence");
+            connection
+                .execute(
+                    "INSERT INTO history VALUES(?1,?2,?3)",
+                    params![
+                        "legacy",
+                        "2001-01-01T12:00:00Z",
+                        serde_json::to_string(&Transcript {
+                            created_at: "2001-01-01T12:00:00Z".into(),
+                            words: 3,
+                            ..record
+                        })
+                        .unwrap()
+                    ],
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.summary().unwrap().words, 3);
+        let stats = store.statistics().unwrap();
+        assert_eq!(stats.total.words, 3);
+        assert!(stats.days[0].name.starts_with("2001"));
+        assert!(!serde_json::to_string(&stats)
+            .unwrap()
+            .contains("Private original sentence"));
+        assert_eq!(store.history_page("Private", 0, 50).unwrap().total, 1);
+        let again = Store::open(&path).unwrap();
+        assert_eq!(again.summary().unwrap().count, 1);
+    }
     #[test]
     fn last_transcript_recovers_after_restart_but_never_in_private_mode() {
         let dir = tempfile::tempdir().unwrap();

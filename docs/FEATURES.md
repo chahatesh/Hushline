@@ -17,10 +17,13 @@
 | Optional Groq AI cleanup and local fallback | Partially Implemented | HTTP and validation regressions plus synthetic live edits; general accuracy is not guaranteed. |
 | Personal dictionary and exact-trigger snippets | Implemented | Persistence, import/export, replacements, whole-trigger expansion, and previews tested. |
 | App-specific styles | Partially Implemented | Executable-name matching; browser-domain detection is absent. |
-| Transcript history, scratchpad, statistics and backup | Implemented | SQLite and interface tests. Backups exclude keys, transcripts and audio. |
+| All-time transcript history, search/export, scratchpad and backup | Implemented | SQLite migration/restart/retry/deletion and paged interface regressions. Text has no age cutoff; configuration backups exclude keys, transcripts and audio. |
+| Activity calendar, historical years and usage graphs | Implemented | Local all-history aggregation, leap-year/streak/range tests and headless interface tests. No telemetry. |
+| Local 10,000-word writing profiles | Implemented | Exact block-boundary, topic/vocabulary, restart and deletion regressions. Fixed English keywords estimate topics; no biometric or personality inference. |
 | Encrypted saved recording history and bounded retention | Partially Implemented | DPAPI restart, retention, linked deletion and privacy regressions; packaged live acceptance pending. |
 | Listen, download and retry recognition | Partially Implemented | Binary WAV/HTTP/interface tests; packaged playback and live retry acceptance pending. |
-| Command Mode and Improve prompt | Partially Implemented | Input limits, preview/cancellation/identity regressions; full live selected/whole-field acceptance pending. |
+| Command Mode and external-field Improve prompt | Partially Implemented | Input limits, preview/cancellation/identity and stale-snapshot regressions; full live selected/whole-field acceptance pending. |
+| Prompt editor, Clarify/Expand and editing preferences | Partially Implemented | Dedicated provider instructions, protected-token validation and transient editable draft UI tested with synthetic fixtures. Live model output quality remains unverified for this version. |
 | Offline Whisper Tiny/Base | Partially Implemented | Verified downloads and real Tiny CPU speech fixture; Base accuracy and live delivery pending. |
 | Local Ollama rewriting | Partially Implemented | Local-only client and small-model trial; general live editing acceptance pending. |
 | Credential Manager API-key storage | Partially Implemented | Round-trip/native IPC tests; independent installation acceptance pending. |

@@ -2,6 +2,125 @@
 // UI behavior only. These tests do not claim native/Groq end-to-end acceptance.
 import { test, expect } from '@playwright/test';
 import { defaults, emptyView } from '../../src/types';
+import { previewStatistics, emptyStatistics } from '../../src/statistics-data';
+
+test('live microphone levels do not repeatedly query history or rebuild statistics',async({page})=>{
+  await page.addInitScript(({defaults,emptyView,statistics})=>{
+    const host=window as unknown as Record<string,unknown>;host.isTauri=true;
+    let next=0;const callbacks=new Map<number,(event:unknown)=>void>(),listeners=new Map<string,number>();
+    const calls={statistics:0,history:0};host.__USAGE_CALLS__=calls;
+    host.__EMIT_LEVELS__=()=>{host.__LEVELS_DONE__=false;for(let index=0;index<20;index++)setTimeout(()=>{callbacks.get(listeners.get('dictation')!)?.({event:'dictation',id:1,payload:{...emptyView,phase:'listening',level:index/20,seconds:index/10}});if(index===19)host.__LEVELS_DONE__=true;},index*10);};
+    host.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};
+    host.__TAURI_INTERNALS__={transformCallback:(callback:(event:unknown)=>void)=>{callbacks.set(++next,callback);return next;},invoke:async(command:string,args:Record<string,unknown>)=>{
+      if(command==='plugin:event|listen'){listeners.set(String(args.event),Number(args.handler));return args.handler;}
+      if(command==='usage_statistics'){calls.statistics++;return statistics;}
+      if(command==='history_page'){calls.history++;return {records:[],total:0,offset:0,revision:0};}
+      if(command==='snapshot')return {settings:defaults,view:emptyView,dictionary:[],snippets:[],styles:[],history:[],historySummary:{count:0,words:0,revision:0},savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+    }};
+  },{defaults,emptyView,statistics:emptyStatistics()});
+  await page.reload();await page.getByRole('button',{name:'Statistics',exact:true}).click();await expect(page.getByText('0 saved transcripts')).toBeVisible();
+  await page.evaluate(()=>(window as unknown as {__EMIT_LEVELS__:()=>void}).__EMIT_LEVELS__());
+  await expect(page.locator('.topbar-right')).toContainText('Recording');
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {__LEVELS_DONE__:boolean}).__LEVELS_DONE__)).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {__USAGE_CALLS__:{statistics:number}}).__USAGE_CALLS__.statistics)).toBe(1);
+  await page.getByRole('button',{name:'History',exact:true}).click();await expect(page.getByRole('heading',{name:'0 transcripts'})).toBeVisible();
+  await page.evaluate(()=>(window as unknown as {__EMIT_LEVELS__:()=>void}).__EMIT_LEVELS__());
+  await expect(page.locator('.topbar-right')).toContainText('Recording');
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {__LEVELS_DONE__:boolean}).__LEVELS_DONE__)).toBe(true);
+  expect(await page.evaluate(()=>(window as unknown as {__USAGE_CALLS__:{history:number}}).__USAGE_CALLS__.history)).toBe(1);
+});
+
+test('10,000-word profile snapshots are selectable and remain readable in both themes',async({page})=>{
+  const history=Array.from({length:20},(_,i)=>({id:`public-${i}`,text:(i<10?'code ':'prompt ').repeat(430+i*60),createdAt:new Date(2026,9,1+i,12).toISOString(),app:i%2?'Code.exe':'Notepad.exe',words:430+i*60,durationMs:300000,latencyMs:700,inserted:true}));
+  const stats=previewStatistics(history);
+  stats.profiles=[{fromWord:1,throughWord:10000,completedAt:history[12].createdAt,topics:[{name:'Software & development',count:10000}],terms:[{name:'code',count:10000}]},{fromWord:10001,throughWord:20000,completedAt:history[19].createdAt,topics:[{name:'AI & prompts',count:2200},{name:'Software & development',count:1600},{name:'Planning & notes',count:800},{name:'Writing & communication',count:400}],terms:[{name:'prompt',count:840},{name:'code',count:720},{name:'model',count:590},{name:'notes',count:460},{name:'tests',count:390},{name:'project',count:330},{name:'writing',count:280},{name:'api',count:210}]}];
+  await page.addInitScript(({stats,defaults,emptyView})=>{
+    const host=window as unknown as Record<string,unknown>;host.isTauri=true;host.__HUSHLINE_PAGE__='Statistics';
+    host.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};
+    host.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command:string)=>{
+      if(command==='usage_statistics')return stats;
+      if(command==='snapshot')return {settings:{...defaults,theme:'light'},view:emptyView,dictionary:[],snippets:[],styles:[],history:[],historySummary:{count:20,words:20000,revision:20},savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+    }};
+  },{stats,defaults,emptyView});
+  await page.reload();
+  const profile=page.getByRole('region',{name:'Local voice profile'});
+  await expect(profile).toContainText('AI & prompts');
+  await page.getByLabel('Profile snapshot',{exact:true}).selectOption('10000');await expect(profile).toContainText('Software & development');
+  await page.getByLabel('Profile snapshot',{exact:true}).selectOption('20000');
+  await page.evaluate(()=>{const label=document.createElement('span');label.className='preview-label';label.textContent='Example data';document.querySelector('.topbar-right')?.prepend(label);});
+  await page.screenshot({path:'docs/screenshots/statistics.png',fullPage:true});
+  for(const theme of ['light','dark'])for(const width of [1280,900,390]){
+    await page.setViewportSize({width,height:900});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    expect(await page.evaluate(()=>document.body.scrollWidth)).toBe(width);
+    expect(await page.locator('.voice-profile').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  }
+});
+
+test('all-time activity includes older years, keyboard day selection and no seven-day cutoff',async({page})=>{
+  await page.evaluate(()=>{
+    const history=Array.from({length:120},(_,index)=>({id:`day-${index}`,text:'Code prompt notes plan',createdAt:new Date(2020,0,1+index,12).toISOString(),app:index%2?'Code.exe':'Notepad.exe',words:4,durationMs:2000,latencyMs:500,inserted:true}));
+    localStorage.setItem('hushline-browser-preview-v1',JSON.stringify({history}));
+  });
+  await page.reload();await page.getByRole('button',{name:'Statistics',exact:true}).click();
+  await expect(page.getByText('120 saved transcripts')).toBeVisible();
+  await page.getByLabel('Activity year').selectOption('2020');
+  const cell=page.getByRole('button',{name:'2020-01-02: 4 words',exact:true});await cell.click();
+  await expect(page.locator('.day-detail')).toContainText('4 words');
+  await cell.press('ArrowRight');await expect(page.getByRole('button',{name:'2020-01-09: 4 words',exact:true})).toBeFocused();
+  await expect(page.getByLabel('Chart time range')).toHaveValue('all');
+  await expect(page.locator('.word-trend')).toHaveAccessibleName(/480 words/u);
+  await page.getByText('View chart data',{exact:true}).click();await expect(page.locator('.insight-table')).toContainText('2020-01');
+  const fileEvent=page.waitForEvent('download');await page.getByRole('button',{name:'Export statistics',exact:true}).click();const file=await fileEvent;
+  const stream=await file.createReadStream();const chunks:Buffer[]=[];for await(const chunk of stream!)chunks.push(Buffer.from(chunk));
+  const stats=JSON.parse(Buffer.concat(chunks).toString());expect(stats.total.words).toBe(480);expect(stats.days).toHaveLength(120);expect(stats).not.toHaveProperty('history');
+  for(const width of [1280,900,390]) {await page.setViewportSize({width,height:900});expect(await page.evaluate(()=>document.body.scrollWidth)).toBe(width);}
+});
+
+test('history search, pagination and export cover records before the first thousand',async({page})=>{
+  await page.evaluate(()=>{
+    const history=Array.from({length:1105},(_,index)=>({id:`record-${index}`,text:index===0?'Oldest searchable entry':'A retained public fixture',createdAt:new Date(2018,0,1+index,12).toISOString(),app:'Notepad.exe',words:4,durationMs:2000,latencyMs:500,inserted:true}));
+    localStorage.setItem('hushline-browser-preview-v1',JSON.stringify({history}));
+  });
+  await page.reload();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:/^History/u}).click();
+  await expect(page.getByRole('heading',{name:'1,105 transcripts'})).toBeVisible();
+  await expect(page.locator('.transcript-row')).toHaveCount(50);
+  await page.getByRole('button',{name:'Next',exact:true}).click();await expect(page.locator('.history-pagination')).toContainText('51–100');
+  await page.getByLabel('Search history').fill('Oldest searchable');await expect(page.locator('.transcript-row')).toHaveCount(1);await expect(page.locator('.transcript-row')).toContainText('Oldest searchable entry');
+  const fileEvent=page.waitForEvent('download');await page.getByRole('button',{name:'Export all',exact:true}).click();const file=await fileEvent;
+  const stream=await file.createReadStream();const chunks:Buffer[]=[];for await(const chunk of stream!)chunks.push(Buffer.from(chunk));
+  const exported=JSON.parse(Buffer.concat(chunks).toString());expect(exported).toHaveLength(1105);expect(exported.at(-1).text).toBe('Oldest searchable entry');
+});
+
+test('prompt composer sends the chosen action and preference, stays transient, and cannot apply a draft to a field',async({page})=>{
+  await page.addInitScript(({defaults,emptyView})=>{
+    const host=window as unknown as Record<string,unknown>;host.isTauri=true;
+    let view={...emptyView};let next=0;
+    const callbacks=new Map<number,(event:unknown)=>void>(),listeners=new Map<string,number>();
+    host.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};
+    host.__TAURI_INTERNALS__={transformCallback:(callback:(event:unknown)=>void)=>{callbacks.set(++next,callback);return next;},invoke:async(command:string,args:Record<string,unknown>)=>{
+      if(command==='plugin:event|listen'){listeners.set(String(args.event),Number(args.handler));return args.handler;}
+      if(command==='snapshot')return {settings:defaults,view,dictionary:[],snippets:[],styles:[],history:[],historySummary:{count:0,words:0,revision:0},savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+      if(command==='improve_prompt_text'){
+        host.__PROMPT_REQUEST__=args;
+        view={...view,phase:'preview',previewKind:'prompt_draft',previewId:'draft-preview',preview:'Plan a focused test of the desktop app.',original:String(args.text),promptGuidance:String(args.guidance)};
+        callbacks.get(listeners.get('dictation')!)?.({event:'dictation',id:1,payload:view});
+      }
+      if(command==='apply_preview')host.__UNEXPECTED_APPLY__=args;
+    }};
+  },{defaults,emptyView});
+  await page.reload();await page.getByRole('button',{name:'Improve prompt',exact:true}).click();
+  await page.getByLabel('Your prompt',{exact:true}).fill('help me test the app');
+  await page.getByRole('group',{name:'Edit this prompt'}).getByRole('button',{name:/^Expand/u}).click();
+  await page.getByLabel(/How should it improve/u).fill('Keep it concise');
+  await page.getByRole('button',{name:'Improve this prompt',exact:true}).click();
+  await expect(page.getByLabel('Proposed text',{exact:true})).toHaveValue('Plan a focused test of the desktop app.');
+  expect(await page.evaluate(()=>(window as unknown as {__PROMPT_REQUEST__:unknown}).__PROMPT_REQUEST__)).toEqual({text:'help me test the app',mode:'expand',guidance:'Keep it concise'});
+  await expect(page.getByRole('button',{name:'Apply to original field',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Copy improved prompt',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>('__UNEXPECTED_APPLY__' in window))).toBe(false);
+  expect(await page.evaluate(()=>JSON.stringify(localStorage).includes('help me test the app'))).toBe(false);
+  await page.reload();await page.getByRole('button',{name:'Improve prompt',exact:true}).click();await expect(page.getByLabel('Your prompt',{exact:true})).toHaveValue('');
+});
 
 test('a prompt preview survives an older opening snapshot and can be edited before Apply', async ({page}) => {
   const fixture = {settings:defaults,view:{...emptyView,phase:'processing',stage:'prompt_editing',generation:3},dictionary:[],snippets:[],styles:[],history:[],savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
@@ -105,7 +224,7 @@ test('multiline snippets and writing styles are editable', async ({ page }) => {
 });
 test('scratchpad saves and statistics do not fabricate usage', async ({ page }) => {
   await page.getByRole('button', { name: 'Scratchpad', exact: true }).click(); await page.getByLabel('Scratchpad', { exact: true }).fill('A quiet place\nfor a useful thought.'); await page.getByRole('button', { name: 'Save notes' }).click(); await page.reload(); await page.getByRole('button', { name: 'Scratchpad', exact: true }).click(); await expect(page.getByLabel('Scratchpad', { exact: true })).toHaveValue('A quiet place\nfor a useful thought.');
-  await page.getByRole('button', { name: 'Statistics', exact: true }).click(); await expect(page.getByText('0 recordings in retained history')).toBeVisible();
+  await page.getByRole('button', { name: 'Statistics', exact: true }).click(); await expect(page.getByText('0 saved transcripts')).toBeVisible();
 });
 test('settings, private mode, dark theme and backup exclusion', async ({ page }) => {
   await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByLabel('Appearance').selectOption('dark'); await page.getByRole('tab', { name: 'Privacy & data' }).click(); await page.getByRole('switch', { name: /Save transcript history/ }).uncheck(); await page.getByRole('button', { name: 'Save settings' }).click();

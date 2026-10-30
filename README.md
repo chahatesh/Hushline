@@ -20,8 +20,9 @@ No Hush account, subscription, telemetry, or application usage limits. Groq's ch
 - Casual, Standard, and Formal writing styles, with local paragraphs, lists, dictionary rules, and spoken punctuation.
 - Independent Always, Sometimes, and Never AI-polishing choices. Plain dictation needs only one speech request.
 - Personal dictionary, exact-trigger multiline snippets, app-specific styles, and a scratchpad.
-- Local transcript and recording history. Listen, download a WAV, or retry recognition without recording again.
-- Command Mode for selected text and Improve prompt for a whole editable field. Edits require preview approval.
+- All-time transcript history, full-history search/export, and saved recordings you can listen to or retry.
+- A daily activity calendar, historical year views, word trends, application/hour breakdowns, and local writing profiles for every 10,000 saved words.
+- Command Mode for selected text, whole-field Improve prompt, and a dedicated prompt editor with Clarify/Expand and editing preferences. Field replacement requires preview approval.
 - Secure API-key storage in Windows Credential Manager and encrypted saved recordings.
 
 See [feature status](docs/FEATURES.md) for supported behavior and compatibility limits.
@@ -75,7 +76,17 @@ Choose **Always / Sometimes / Never** AI polish independently of style. Never ke
 
 A clear correction such as “I have three dogs. Wait, no, I actually have four” can become “I have four dogs.” Ambiguous corrections are preserved. Automatic AI cleanup falls back to local text if it times out or fails validation.
 
-Command Mode reads only an explicitly selected range after you enable permission. To improve an existing prompt, focus its text field and press **Ctrl + Shift + P**. Hush reads that field, offers Clarify or Expand, and brings the editable proposal into view. Choose **Apply to original field** to replace it, or Copy/Cancel. Both show an editable preview before replacement. Changed, protected, terminal, or unsupported fields are refused; Hush never executes dictated commands or submits messages.
+Command Mode reads only an explicitly selected range after you enable permission. To improve an existing prompt, focus its text field and press **Ctrl + Shift + P**. Hush reads that field, offers Clarify or Expand, and brings the editable proposal into view. Choose **Apply to original field** to replace it, or Copy/Cancel. Both show an editable preview before replacement. Changed, protected, terminal, or unsupported fields are refused; Hush never executes dictated commands or submits messages. You can also open **Improve prompt** in the sidebar, write or paste a draft, and add a short editing preference such as “Keep it concise.” Clarify keeps your requirements; Expand labels proposed additions as optional. Drafts are not linked to an external field: copy the result when ready. Prompt contents stay transient and are not saved as transcript history.
+
+## Statistics and voice profiles
+
+**Statistics** uses every retained transcript, from the beginning. Choose a historical year in the activity grid, click a day for its counts, or use arrow keys to move between days. Word trends can show all months or recent daily totals. Application usage, speaking time, active days, streaks, processing time, and writing structure use saved records; private sessions and deleted records are excluded.
+
+Every **10,000 saved words** creates a local voice-profile snapshot for that block of words. It shows recurring vocabulary and estimated topics such as AI/prompts, software, or planning. Profiles use a fixed English keyword vocabulary, with unmatched words left unclassified. They describe writing, not voice identity, personality, or sensitive traits. No model, background cloud request, or additional download is needed. Deleting or retrying source records rebuilds their statistics and profiles.
+
+![Statistics with synthetic example data](docs/screenshots/statistics.png)
+
+Transcript text has no automatic age cutoff. History pages keep the interface small; search and **Export all** cover the complete text history. Export statistics downloads counts, application names, and profile evidence without transcripts. Recovery audio retains its separate storage limits below. Previously deleted records cannot be reconstructed.
 
 ## Recordings and privacy
 

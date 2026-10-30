@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-10-30
+
+- Use all retained history for totals, activity and profiles. Add paged full-history search and complete text export without a 1,000-record display/export cutoff.
+- Add a yearly activity grid with day details, historical years, all-time/monthly word trends, application usage, hourly/weekly rhythm, streaks and speaking/processing metrics.
+- Create local writing-profile snapshots for each 10,000-word block, with estimated topics and recurring vocabulary. Profiles need no model or cloud request and exclude private/deleted history.
+- Separate prompt improvement from dictation-cleanup instructions. Add a dedicated prompt editor, optional editing preferences and regeneration from the original; retain editable previews and explicit approval for external-field replacement.
+- Reject prompt edits that drop explicit numbers, links or backticked identifiers. Unsupported field capture opens an actionable editor without reading unrelated text.
+
 ## 0.6.2 — 2026-10-28
 
 - Restore the latest saved transcript for Paste last after restart when history is enabled. Private mode skips recovery, and history deletion clears the cached result.

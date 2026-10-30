@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { defaults, emptyView, migrateSettings, type Snapshot, type Backup, type Settings } from './types';
+import { previewStatistics } from './statistics-data';
 export const desktop = isTauri();
 const previewKey = 'hushline-browser-preview-v1';
-function initial(): Snapshot { return { offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], savedAudio: [], diagnostics: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
+function initial(): Snapshot { return { historySummary: {count:0,words:0,revision:0}, offline: { installed: [], engineVersion: '1.9.2' }, settings: structuredClone(defaults), dictionary: [], snippets: [], styles: [], history: [], savedAudio: [], diagnostics: [], scratchpad: '', view: { ...emptyView }, startupEnabled: false }; }
 function readPreview(): Snapshot { try { const stored = localStorage.getItem(previewKey); if (stored) { const parsed = JSON.parse(stored); return { ...initial(), ...parsed, settings: migrateSettings(parsed.settings), view: { ...emptyView } }; } } catch { /* A corrupt preview never affects native storage. */ } return initial(); }
 export async function call<T = void>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (desktop) return invoke<T>(command, args);
@@ -11,7 +12,9 @@ export async function call<T = void>(command: string, args: Record<string, unkno
   const data = readPreview();
   let result: unknown;
   switch (command) {
-    case 'snapshot': result = data; break;
+    case 'snapshot': result = {...data,historySummary:{count:data.history.length,words:data.history.reduce((sum,t)=>sum+t.words,0),revision:data.history.length}}; break;
+    case 'history_page': { const query=String(args.query||'').toLocaleLowerCase(); const filtered=data.history.filter(t=>`${t.text} ${t.app}`.toLocaleLowerCase().includes(query)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id)); result={records:filtered.slice(Number(args.offset),Number(args.offset)+Number(args.limit)),total:filtered.length,offset:Number(args.offset),revision:data.history.length}; break; }
+    case 'usage_statistics': result=previewStatistics(data.history); break;
     case 'save_settings': data.settings = args.settings as Settings; break;
     case 'save_dictionary': data.dictionary = args.entries as Snapshot['dictionary']; break;
     case 'save_snippets': data.snippets = args.entries as Snapshot['snippets']; break;

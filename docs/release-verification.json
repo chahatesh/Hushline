@@ -1,9 +1,9 @@
 {
-  "version": "0.6.2",
+  "version": "0.7.0",
   "tester": "Local automated validation in the implementation workspace",
   "hardware": "Windows 10.0.26300 x64; Intel Core i5-1235U; 12 logical processors; 7.7 GiB RAM",
   "testedAt": null,
-  "evidence": "Live acceptance for 0.6.2 remains pending. Automated results are available in Windows CI.",
+  "evidence": "Live acceptance for 0.7.0 remains pending. Automated results are available in Windows CI.",
   "checks": {
     "installLaunch": false,
     "saveKey": false,
