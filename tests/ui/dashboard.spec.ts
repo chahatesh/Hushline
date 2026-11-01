@@ -4,6 +4,27 @@ import { test, expect } from '@playwright/test';
 import { defaults, emptyView } from '../../src/types';
 import { previewStatistics, emptyStatistics } from '../../src/statistics-data';
 
+test('history paste sends the chosen saved text immediately without a second shortcut', async ({ page }) => {
+  await page.addInitScript(({ defaults, emptyView }) => {
+    const host = window as unknown as Record<string, unknown>;
+    host.isTauri = true;
+    const transcript = { id: 'saved-fixture', text: 'Saved fixture ready to paste.', createdAt: '2026-01-02T12:00:00Z', app: 'notepad.exe', words: 6, durationMs: 2000, latencyMs: 500, inserted: false };
+    host.__TAURI_INTERNALS__ = {
+      transformCallback: () => 1,
+      invoke: async (command: string, args: Record<string, unknown>) => {
+        if (command === 'snapshot') return { settings: defaults, view: emptyView, dictionary: [], snippets: [], styles: [], history: [transcript], historySummary: { count: 1, words: 6, revision: 1 }, savedAudio: [], diagnostics: [], scratchpad: '', startupEnabled: false, offline: { installed: [], engineVersion: '1.9.2' } };
+        if (command === 'history_page') return { records: [transcript], total: 1, offset: 0, revision: 1 };
+        if (command === 'recover_text') host.__SAVED_PASTE__ = args;
+      },
+    };
+  }, { defaults, emptyView });
+  await page.reload();
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^History/u }).click();
+  await page.getByRole('button', { name: 'Paste transcript', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as Record<string, unknown>).__SAVED_PASTE__)).toEqual({ text: 'Saved fixture ready to paste.' });
+  await expect(page.getByText(/^Ready\. Focus a text field/u)).toHaveCount(0);
+});
+
 test('live microphone levels do not repeatedly query history or rebuild statistics',async({page})=>{
   await page.addInitScript(({defaults,emptyView,statistics})=>{
     const host=window as unknown as Record<string,unknown>;host.isTauri=true;

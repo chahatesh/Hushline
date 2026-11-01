@@ -54,6 +54,7 @@ enum Message {
     ImprovePrompt(Option<PromptImproveMode>, Option<native::FocusAnchor>),
     Regenerate(PromptImproveMode, Option<String>),
     PromptDraft(String, PromptImproveMode, String),
+    PasteSaved(String),
     PromptDone(u64, Box<PreviewTarget>, String, Result<String, String>),
     PromptFailed(u64, String),
     Done(u64, Box<Result<Completed, String>>),
@@ -314,10 +315,11 @@ async fn bounded_native<T: Send + 'static>(
     cancel: &CancellationToken,
     work: impl FnOnce(CancellationToken) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    let permit = slots.try_acquire_owned().map_err(|_| {
-        "The application's accessibility service is busy. Your text is preserved.".to_string()
-    })?;
     deadline::run(duration, cancel, |child| async move {
+        let permit = slots.acquire_owned().await.map_err(|_| {
+            "The application's accessibility service is unavailable. Your text is preserved."
+                .to_string()
+        })?;
         tauri::async_runtime::spawn_blocking(move || {
             let _permit = permit;
             if child.is_cancelled() {
@@ -933,6 +935,54 @@ mod capture_quality_tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn temporarily_busy_native_worker_waits_then_runs_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let slots = Arc::new(Semaphore::new(1));
+        let held = slots.clone().acquire_owned().await.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(held);
+        });
+        let result = bounded_native(
+            slots,
+            Duration::from_secs(1),
+            &CancellationToken::new(),
+            move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        release.await.unwrap();
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn cancelled_waiting_native_worker_cannot_start_later() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let slots = Arc::new(Semaphore::new(1));
+        let held = slots.clone().acquire_owned().await.unwrap();
+        let called = Arc::new(AtomicBool::new(false));
+        let observed = called.clone();
+        let result = bounded_native(
+            slots.clone(),
+            Duration::from_millis(15),
+            &CancellationToken::new(),
+            move |_| {
+                observed.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        drop(held);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!called.load(Ordering::SeqCst));
+        assert!(slots.try_acquire_owned().is_ok());
+    }
+    #[tokio::test]
     async fn stalled_delivery_is_cancelled_and_cannot_insert_later() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let slots = Arc::new(Semaphore::new(1));
@@ -1333,6 +1383,7 @@ async fn actor(
                 | Message::ImprovePrompt(_, _)
                 | Message::Regenerate(_, _)
                 | Message::PromptDraft(_, _, _)
+                | Message::PasteSaved(_)
                 | Message::Apply(_)
         ) {
             deferred_push.clear();
@@ -1358,6 +1409,41 @@ async fn actor(
             }
         }
         let mut menu_origin = None;
+        let mut paste_after_dashboard = false;
+        if let Message::PasteSaved(text) = message {
+            if session.is_some() || state.view.lock().unwrap().phase == "processing" {
+                continue;
+            }
+            // History paste is an explicit new delivery request, including
+            // after reviewing a saved result. No second shortcut is required.
+            reset_job(&state, &mut generation, &mut cancellation, &mut delivery);
+            pending = None;
+            if let Some(window) = app.get_webview_window("main") {
+                if window.hide().is_err() {
+                    publish(&app, &state, |v| {
+                        v.last_text = text;
+                        v.recoverable = true;
+                        v.warning =
+                            "Hush could not return to your text box. Focus it and use Paste last."
+                                .into();
+                    });
+                    continue;
+                }
+            }
+            publish(&app, &state, |v| {
+                v.generation = generation;
+                v.phase = "idle".into();
+                v.stage.clear();
+                v.last_text = text;
+                v.preview = None;
+                v.original = None;
+                v.preview_id = None;
+                v.preview_kind.clear();
+                v.warning.clear();
+            });
+            paste_after_dashboard = true;
+            message = Message::Action(Action::Paste);
+        }
         if let Message::Action(Action::Quick(selection)) = message {
             if matches!(selection.command, QuickCommand::Paste | QuickCommand::Copy)
                 && state.view.lock().unwrap().last_text.is_empty()
@@ -1446,7 +1532,7 @@ async fn actor(
                 });
                 schedule_hide(&state, generation, lifecycle::RECOVERY_NOTICE_MS);
             }
-            Message::DeferredPush(_) => unreachable!(),
+            Message::DeferredPush(_) | Message::PasteSaved(_) => unreachable!(),
             Message::RecoverySaved(id, in_memory) => {
                 let _ = app.emit_to("main", "recovery-updated", ());
                 if id == generation && !cancellation.is_cancelled() {
@@ -1569,13 +1655,19 @@ async fn actor(
                                 let notice = clipboard_notice(st.tx.clone());
                                 let result = native_work(
                                     &st,
-                                    Duration::from_secs(5),
+                                    native::delivery::DELIVERY_TIMEOUT,
                                     &token,
                                     move |child| {
-                                        let origin = origin?;
-                                        native::insert_focused_with_notice(
-                                            &origin, &text, &method, &child, notice,
-                                        )
+                                        if paste_after_dashboard {
+                                            native::insert_recovered_with_notice(
+                                                &text, &child, notice,
+                                            )
+                                        } else {
+                                            let origin = origin?;
+                                            native::insert_focused_with_notice(
+                                                &origin, &text, &method, &child, notice,
+                                            )
+                                        }
                                     },
                                 )
                                 .await;
@@ -2196,7 +2288,7 @@ async fn actor(
                                 let notice = clipboard_notice(st.tx.clone());
                                 let result = native_work(
                                     &st,
-                                    Duration::from_secs(5),
+                                    native::delivery::DELIVERY_TIMEOUT,
                                     &token,
                                     move |child| {
                                         if let Some(origin) = origin {
@@ -2343,8 +2435,11 @@ async fn actor(
                 processing(&app, &state, "inserting", "Applying your edit");
                 tauri::async_runtime::spawn(async move {
                     let notice = clipboard_notice(st.tx.clone());
-                    let result = native_work(&st, Duration::from_secs(5), &token, move |child| {
-                        match p.target {
+                    let result = native_work(
+                        &st,
+                        native::delivery::DELIVERY_TIMEOUT,
+                        &token,
+                        move |child| match p.target {
                             PreviewTarget::Selection(target) => native::insert_with_notice(
                                 &target, &p.text, &method, true, &child, notice,
                             ),
@@ -2357,8 +2452,8 @@ async fn actor(
                                 "This is a draft. Copy the improved prompt into your chosen app."
                                     .into(),
                             ),
-                        }
-                    })
+                        },
+                    )
                     .await;
                     let _ = st.tx.send(Message::Applied(id, result));
                 });
@@ -2592,13 +2687,20 @@ fn copy_text(text: String) -> Result<(), String> {
 }
 #[tauri::command]
 fn recover_text(state: State<Arc<AppState>>, text: String) -> Result<(), String> {
-    if text.len() > 100_000 {
-        return Err("Text is too large.".into());
+    if text.trim().is_empty() || text.contains('\0') || text.len() > 1_000_000 {
+        return Err("Choose a nonempty transcript smaller than 1 MB.".into());
     }
-    let mut view = state.view.lock().map_err(|_| "State unavailable")?;
-    view.recoverable = !text.is_empty();
-    view.last_text = text;
-    Ok(())
+    let view = state.view.lock().map_err(|_| "State unavailable")?;
+    if matches!(view.phase.as_str(), "starting" | "listening" | "processing") {
+        return Err(
+            "Finish or cancel the current dictation before pasting a saved transcript.".into(),
+        );
+    }
+    drop(view);
+    state
+        .tx
+        .send(Message::PasteSaved(text))
+        .map_err(|_| "Dictation engine unavailable".into())
 }
 #[tauri::command]
 fn action(state: State<Arc<AppState>>, name: String) -> Result<(), String> {

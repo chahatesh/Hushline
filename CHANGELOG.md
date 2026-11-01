@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 — 2026-10-31
+
+- Retry temporary field-readiness, held modifiers, clipboard contention and rejected paste input every 100 ms for up to five seconds. Keep one bounded worker and never replay a partial or accepted edit.
+- Make the History paste button return to the receiving app and paste immediately, without another shortcut. Keep the selected transcript recoverable if Windows prevents delivery.
+- Keep clipboard text available for 1.5 seconds after dispatch for slower paste handlers, while preserving any newer copied content.
+- Wait for an available native worker within the delivery deadline instead of immediately rejecting another paste.
+
 ## 0.7.0 — 2026-10-30
 
 - Use all retained history for totals, activity and profiles. Add paged full-history search and complete text export without a 1,000-record display/export cutoff.

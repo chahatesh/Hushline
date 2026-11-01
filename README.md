@@ -94,6 +94,8 @@ Recordings are retained before recognition so a failed request can be retried fr
 
 Cloud mode sends necessary audio and optional editing text to Groq. Offline mode has no cloud fallback. Transcript history and settings stay on your computer and are not encrypted. Password fields and terminal automatic insertion are unsupported. If focus changes or Windows prevents safe delivery, use **Paste here** on the recovery card or the paste-last shortcut in your intended field.
 
+Paste preparation automatically retries temporary failures every 100 ms for up to five seconds. In History, **Paste transcript** hides the dashboard and pastes into the receiving text box without another shortcut. Focus that box before opening History. Windows can still block elevated, protected or unsupported fields; a partial or already accepted paste is never repeated automatically, which avoids duplicate text.
+
 Read the [privacy policy](PRIVACY.md), [offline guide](docs/OFFLINE.md), and [security policy](SECURITY.md).
 
 ## Build from source

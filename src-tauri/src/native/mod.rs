@@ -3,6 +3,7 @@
 mod clipboard;
 #[cfg(windows)]
 mod cue;
+pub(crate) mod delivery;
 #[cfg(windows)]
 mod edit;
 #[cfg(windows)]

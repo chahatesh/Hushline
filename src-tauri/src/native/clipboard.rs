@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Bounded clipboard preservation, including native images. Unknown handle types
 //! cause a refusal before mutation, never a destructive best-effort snapshot.
+use super::delivery::{self, Budget, Failure};
 use super::{capture_target, input_epoch, FocusAnchor, Target};
 use std::{
     mem::size_of,
@@ -268,12 +269,13 @@ struct PendingRestore {
     owner: Owner,
     saved: Saved,
     sequence: u32,
-    delivered: bool,
+    dispatch: delivery::Attempt<()>,
 }
 #[derive(Clone)]
 enum Destination {
     Original(Target, bool),
     Focused(FocusAnchor),
+    WaitingForField,
 }
 enum Prepared {
     Clipboard(PendingRestore),
@@ -301,19 +303,35 @@ pub(super) fn paste_focused(
 ) -> Result<String> {
     paste(Destination::Focused(anchor.clone()), text, cancel, notice)
 }
-fn paste(
-    destination: Destination,
+pub(super) fn paste_recovered(
     text: &str,
     cancel: &tokio_util::sync::CancellationToken,
     notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
-    let permit = WorkerPermit::acquire(&PASTE_WORKERS).ok_or(
-        "Windows clipboard editing is still busy. Your text is preserved; try again after the field responds.",
-    )?;
+    paste(Destination::WaitingForField, text, cancel, notice)
+}
+fn paste(
+    mut destination: Destination,
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
+    if text.is_empty() || text.contains('\0') || text.len() > 1_000_000 {
+        return Err("This transcript cannot be pasted safely. Your text is preserved.".into());
+    }
+    let budget = Budget::new();
+    let permit = budget.run(cancel, || {
+        WorkerPermit::acquire(&PASTE_WORKERS).ok_or_else(|| {
+            Failure::Retry(
+                "Windows clipboard editing is still busy. Your text is preserved.".into(),
+            )
+        })
+    })?;
     let text = text.to_string();
     let token = cancel.child_token();
     let worker_token = token.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let wait = budget.remaining() + Duration::from_millis(250);
     std::thread::Builder::new()
         .name("hush-clipboard".into())
         .spawn(move || {
@@ -321,7 +339,29 @@ fn paste(
             // stalled. Hold the permit until this actual worker and delayed
             // restoration finish, not just until the caller stops waiting.
             let _permit = permit;
-            match prepare_paste(&destination, &text, &worker_token) {
+            let result = budget.run(&worker_token, || {
+                if matches!(destination, Destination::WaitingForField) {
+                    // An explicit History paste hides Hush first. Bind once to
+                    // the receiving app; never follow later focus/caret changes.
+                    let anchor = super::capture_focus_anchor()
+                        .filter(|a| a.pid != unsafe { windows::Win32::System::Threading::GetCurrentProcessId() })
+                        .ok_or_else(|| Failure::Retry("Focus a text box to paste your saved transcript. Your text is preserved.".into()))?;
+                    destination = Destination::Focused(anchor);
+                }
+                match prepare_paste(&destination, &text, &worker_token, &budget)? {
+                    Prepared::Clipboard(pending) if matches!(pending.dispatch, Err(Failure::Retry(_))) => {
+                        let PendingRestore { owner, saved, sequence, dispatch } = pending;
+                        // No input was accepted. Restore
+                        // before another attempt, and never overwrite a new copy.
+                        if !restore_if_current(&owner, &saved, sequence)? {
+                            return Err(Failure::Stop("The clipboard changed during paste. Your text is preserved.".into()));
+                        }
+                        dispatch.map(|_| unreachable!())
+                    }
+                    prepared => Ok(prepared),
+                }
+            });
+            match result {
                 Err(error) => {
                     let _ = tx.send(Err(error));
                 }
@@ -332,14 +372,9 @@ fn paste(
                     }
                 }
                 Ok(Prepared::Clipboard(pending)) => {
-                    let _ = tx.send(if pending.delivered {
-                        Ok(String::new())
-                    } else {
-                        Err(
-                        "The field changed or Windows blocked paste. Your text is ready to copy."
-                            .into(),
-                    )
-                    });
+                    let _ = tx.send(pending.dispatch.as_ref().map(|_| String::new()).map_err(|failure| match failure {
+                        Failure::Retry(error) | Failure::Stop(error) => error.clone(),
+                    }));
                     let warning = restore_later(pending);
                     if let Some(notice) = notice {
                         notice(warning);
@@ -348,11 +383,11 @@ fn paste(
             }
         })
         .map_err(|_| "Windows clipboard editing could not start. Your text is preserved.")?;
-    match rx.recv_timeout(Duration::from_millis(4500)) {
+    match rx.recv_timeout(wait) {
         Ok(result) => result,
         Err(_) => {
             token.cancel();
-            Err("This field took too long to respond. Your text is ready to copy.".into())
+            Err("Paste could not finish within five seconds. Your text is preserved.".into())
         }
     }
 }
@@ -360,15 +395,21 @@ fn prepare_paste(
     destination: &Destination,
     text: &str,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<Prepared> {
-    if cancel.is_cancelled() {
-        return Err("Cancelled".into());
+    budget: &Budget,
+) -> delivery::Attempt<Prepared> {
+    budget.check(cancel)?;
+    if !super::windows::modifiers_released() {
+        return Err(Failure::Retry(
+            "Release Ctrl, Windows, Shift, and Alt to finish pasting. Your text is preserved."
+                .into(),
+        ));
     }
     // A slow/out-of-process accessibility provider must never hold or replace
     // the user's clipboard while it is being inspected.
     let current = match destination {
         Destination::Original(target, explicit) => {
-            let current = capture_target(!target.selected.is_empty())?;
+            let current =
+                capture_target(!target.selected.is_empty()).map_err(inspection_failure)?;
             if !super::windows::target_matches(target, &current, *explicit) {
                 return Err(
                     "The field changed before insertion. Your text is ready to copy.".into(),
@@ -376,25 +417,38 @@ fn prepare_paste(
             }
             current
         }
-        Destination::Focused(anchor) => inspect_focused_for_delivery(anchor, cancel)?,
+        Destination::Focused(anchor) => {
+            super::windows::check_focus_anchor(anchor, cancel)?;
+            let current = super::windows::capture_focused_target().map_err(inspection_failure)?;
+            super::windows::check_focus_anchor(anchor, cancel)?;
+            current
+        }
+        Destination::WaitingForField => unreachable!(),
     };
     if current.terminal {
         return Err("Automatic insertion into terminals is disabled to avoid executing commands. Your text is preserved.".into());
     }
-    if cancel.is_cancelled() {
-        return Err("Cancelled".into());
-    }
-    if matches!(destination, Destination::Focused(_)) {
-        if let Some(selection) = &current.native_edit {
-            super::edit::insert(&current, selection, text, cancel)?;
-            return Ok(Prepared::NativeEdit);
-        }
+    budget.check(cancel)?;
+    if let Some(selection) = &current.native_edit {
+        super::edit::insert(&current, selection, text, cancel)?;
+        return Ok(Prepared::NativeEdit);
     }
     let owner = Owner::new()?;
-    let lock = open(owner.0)?;
-    let saved = unsafe { snapshot()? };
-    if cancel.is_cancelled() {
-        return Err("Cancelled".into());
+    // One lock attempt per tick; do not consume the budget in nested sleeps.
+    let lock = unsafe { OpenClipboard(Some(owner.0)) }
+        .map(|_| Clipboard)
+        .map_err(|_| {
+            Failure::Retry(
+                "Clipboard is busy. Retrying paste for up to five seconds; your text is preserved."
+                    .into(),
+            )
+        })?;
+    let saved = unsafe { snapshot() }.map_err(snapshot_failure)?;
+    budget.check(cancel)?;
+    if !super::windows::modifiers_released() {
+        return Err(Failure::Retry(
+            "Release keyboard modifiers to finish pasting. Your text is preserved.".into(),
+        ));
     }
     if let Destination::Focused(anchor) = destination {
         super::windows::check_focus_anchor(anchor, cancel)?;
@@ -407,7 +461,7 @@ fn prepare_paste(
         EmptyClipboard().map_err(|_| "Clipboard could not be prepared.")?;
         if let Err(e) = set_raw(13, &bytes(text)) {
             let _ = restore(&saved);
-            return Err(e);
+            return Err(e.into());
         }
     }
     drop(lock);
@@ -421,6 +475,7 @@ fn prepare_paste(
     let valid = match destination {
         Destination::Focused(anchor) => super::windows::check_focus_anchor(anchor, cancel).is_ok(),
         Destination::Original(_, _) => true,
+        Destination::WaitingForField => false,
     } && input_epoch() == current.epoch
         && unsafe { GetForegroundWindow() }.0 as isize == current.hwnd
         && publication_matches(
@@ -429,8 +484,14 @@ fn prepare_paste(
             sequence,
             unsafe { GetClipboardSequenceNumber() },
         );
-    let mut delivered = false;
-    if valid && !cancel.is_cancelled() {
+    let mut dispatch = Err(Failure::Stop(
+        "The active field or clipboard changed before paste. Your text is preserved.".into(),
+    ));
+    if valid && !super::windows::modifiers_released() {
+        dispatch = Err(Failure::Retry(
+            "Release keyboard modifiers to finish pasting. Your text is preserved.".into(),
+        ));
+    } else if valid && budget.check(cancel).is_ok() {
         let event = |vk, up| INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -452,32 +513,40 @@ fn prepare_paste(
             event(0x56, true),
             event(0x11, true),
         ];
-        delivered = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) } == 4;
+        let accepted = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+        if accepted > 0 && accepted < 4 {
+            // Release only the keys from our incomplete shortcut. Do not replay
+            // V-down: even a partial dispatch may already have caused a paste.
+            let release = [event(0x56, true), event(0x11, true)];
+            unsafe { SendInput(&release, size_of::<INPUT>() as i32) };
+        }
+        dispatch = delivery::input_dispatch(accepted);
     }
     Ok(Prepared::Clipboard(PendingRestore {
         owner,
         saved,
         sequence,
-        delivered,
+        dispatch,
     }))
 }
-fn inspect_focused_for_delivery(
-    anchor: &FocusAnchor,
-    cancel: &tokio_util::sync::CancellationToken,
-) -> Result<Target> {
-    // Retry only read-only inspection. Never retry an edit or dispatched paste.
-    for attempt in 0..3 {
-        super::windows::check_focus_anchor(anchor, cancel)?;
-        match super::windows::capture_focused_target() {
-            Ok(current) => {
-                super::windows::check_focus_anchor(anchor, cancel)?;
-                return Ok(current);
-            }
-            Err(error) if attempt == 2 => return Err(error),
-            Err(_) => std::thread::sleep(Duration::from_millis(50)),
-        }
+fn inspection_failure(error: String) -> Failure {
+    // Protection is conclusive; temporary provider/field readiness is retried.
+    if error == "Cancelled"
+        || error.contains("password")
+        || error == "The focused field is read-only. Transcript preserved."
+        || error.contains("disabled")
+    {
+        Failure::Stop(error)
+    } else {
+        Failure::Retry(error)
     }
-    unreachable!()
+}
+fn snapshot_failure(error: String) -> Failure {
+    if error == "Cannot snapshot the clipboard. Nothing was changed." {
+        Failure::Retry(error)
+    } else {
+        Failure::Stop(error)
+    }
 }
 fn restore_later(pending: PendingRestore) -> String {
     let PendingRestore {
@@ -486,8 +555,14 @@ fn restore_later(pending: PendingRestore) -> String {
         sequence,
         ..
     } = pending;
-    std::thread::sleep(Duration::from_millis(600));
-    let mut warning = String::new();
+    // Browser/Office paste handlers can consume the clipboard asynchronously.
+    // Do not delay the actor, but keep publication alive for slower consumers.
+    std::thread::sleep(Duration::from_millis(1500));
+    restore_if_current(&owner, &saved, sequence)
+        .err()
+        .unwrap_or_default()
+}
+fn restore_if_current(owner: &Owner, saved: &Saved, sequence: u32) -> Result<bool> {
     if publication_matches(
         owner.0,
         unsafe { GetClipboardOwner() }.unwrap_or_default(),
@@ -496,23 +571,25 @@ fn restore_later(pending: PendingRestore) -> String {
     ) {
         match open(owner.0) {
             Ok(_lock) => {
-                if publication_matches(
+                if !publication_matches(
                     owner.0,
                     unsafe { GetClipboardOwner() }.unwrap_or_default(),
                     sequence,
                     unsafe { GetClipboardSequenceNumber() },
-                ) && unsafe { restore(&saved) }.is_err()
-                {
-                    warning=" Clipboard restoration failed; the transcript may still be on the clipboard.".into();
+                ) {
+                    return Ok(false);
                 }
+                unsafe { restore(saved) }.map_err(|_| "Clipboard restoration failed; the transcript may still be on the clipboard.".to_string())?;
+                return Ok(true);
             }
             Err(_) => {
-                warning =
-                    " Clipboard remained busy; the transcript may still be on the clipboard.".into()
+                return Err(
+                    "Clipboard remained busy; the transcript may still be on the clipboard.".into(),
+                )
             }
         }
     }
-    warning
+    Ok(false)
 }
 fn publication_matches(
     owner: HWND,
@@ -528,6 +605,37 @@ mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+    #[test]
+    fn transient_inspection_and_rendering_retry_without_weakening_protection() {
+        for error in [
+            "Cannot inspect the focused field. Transcript will be kept for recovery.",
+            "Windows accessibility is unavailable.",
+            "The focused field is read-only or does not expose safe editing. Transcript preserved.",
+        ] {
+            assert!(matches!(
+                inspection_failure(error.into()),
+                Failure::Retry(_)
+            ));
+        }
+        for error in [
+            "Dictation is disabled in password fields.",
+            "The focused field is read-only. Transcript preserved.",
+            "The focused field is disabled.",
+            "Cancelled",
+        ] {
+            assert!(matches!(inspection_failure(error.into()), Failure::Stop(_)));
+        }
+        assert!(matches!(
+            snapshot_failure("Cannot snapshot the clipboard. Nothing was changed.".into()),
+            Failure::Retry(_)
+        ));
+        assert!(matches!(
+            snapshot_failure(
+                "Clipboard contains an unsupported format that cannot be restored safely.".into()
+            ),
+            Failure::Stop(_)
+        ));
+    }
     #[test]
     fn clipboard_text_uses_windows_line_endings_without_doubling_them() {
         let data = bytes("First\n\n• Second\r\nThird\rFourth");

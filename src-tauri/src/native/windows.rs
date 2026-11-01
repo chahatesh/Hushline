@@ -633,27 +633,10 @@ pub fn insert_with_notice(
     } else if input_epoch() != target.epoch {
         return Err("Focus or cursor changed. Your transcript is ready to copy.".into());
     }
-    wait_for_modifiers(cancel)?;
     if method == "clipboard" {
-        if target.native_edit.is_some() {
-            let current = capture_target(!target.selected.is_empty())?;
-            if !target_matches(target, &current, authorized_preview) {
-                return Err(
-                    "The field changed before insertion. Your text is ready to copy.".into(),
-                );
-            }
-            if let Some(selection) = &current.native_edit {
-                let result = super::edit::insert(&current, selection, text, cancel);
-                if result.is_ok() {
-                    if let Some(notice) = notice {
-                        notice(String::new());
-                    }
-                }
-                return result;
-            }
-        }
         return super::clipboard::paste_text(target, text, authorized_preview, cancel, notice);
     }
+    wait_for_modifiers(cancel)?;
     let final_check = capture_target(!target.selected.is_empty())?;
     if !target_matches(target, &final_check, authorized_preview) {
         return Err("The target changed before insertion. Transcript preserved.".into());
@@ -675,14 +658,29 @@ pub fn insert_focused_with_notice(
     notice: Option<Box<dyn FnOnce(String) + Send>>,
 ) -> Result<String> {
     check_focus_anchor(anchor, cancel)?;
-    wait_for_modifiers(cancel)?;
-    check_focus_anchor(anchor, cancel)?;
     if method == "clipboard" {
         super::clipboard::paste_focused(anchor, text, cancel, notice)
     } else {
+        wait_for_modifiers(cancel)?;
         let current = capture_focused_target()?;
         check_focus_anchor(anchor, cancel)?;
         insert_with_notice(&current, text, method, false, cancel, notice)
+    }
+}
+/// Explicit History paste: the dashboard is hidden before binding to the
+/// receiving app. History always uses bulk insertion instead of simulated typing.
+pub fn insert_recovered_with_notice(
+    text: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    notice: Option<Box<dyn FnOnce(String) + Send>>,
+) -> Result<String> {
+    super::clipboard::paste_recovered(text, cancel, notice)
+}
+pub(super) fn modifiers_released() -> bool {
+    unsafe {
+        [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
+            .iter()
+            .all(|k| GetAsyncKeyState(k.0 as i32) >= 0)
     }
 }
 fn wait_for_modifiers(cancel: &tokio_util::sync::CancellationToken) -> Result<()> {
@@ -691,20 +689,12 @@ fn wait_for_modifiers(cancel: &tokio_util::sync::CancellationToken) -> Result<()
         if cancel.is_cancelled() {
             return Err("Cancelled".into());
         }
-        if unsafe {
-            [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
-                .iter()
-                .all(|k| GetAsyncKeyState(k.0 as i32) >= 0)
-        } {
+        if modifiers_released() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    if unsafe {
-        [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
-            .iter()
-            .any(|k| GetAsyncKeyState(k.0 as i32) < 0)
-    } {
+    if !modifiers_released() {
         return Err("Release keyboard modifiers, then paste the saved transcript.".into());
     }
     if cancel.is_cancelled() {
