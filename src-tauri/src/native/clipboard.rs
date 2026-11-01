@@ -5,7 +5,10 @@ use super::delivery::{self, Budget, Failure};
 use super::{capture_target, input_epoch, FocusAnchor, Target};
 use std::{
     mem::size_of,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, MutexGuard,
+    },
     time::Duration,
 };
 use windows::{
@@ -87,6 +90,10 @@ impl SavedData {
 }
 const MAX_PASTE_WORKERS: usize = 2;
 static PASTE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+// More than one read-only worker may inspect a slow provider, but publications
+// must not overlap: otherwise the second snapshot would save Hush's transcript
+// in place of the user's original clipboard.
+static CLIPBOARD_PUBLICATION: Mutex<()> = Mutex::new(());
 struct WorkerPermit<'a>(&'a AtomicUsize);
 impl<'a> WorkerPermit<'a> {
     fn acquire(active: &'a AtomicUsize) -> Option<Self> {
@@ -266,6 +273,7 @@ unsafe fn restore(all: &[(u32, SavedData)]) -> Result<()> {
     Ok(())
 }
 struct PendingRestore {
+    _publication: MutexGuard<'static, ()>,
     owner: Owner,
     saved: Saved,
     sequence: u32,
@@ -350,7 +358,7 @@ fn paste(
                 }
                 match prepare_paste(&destination, &text, &worker_token, &budget)? {
                     Prepared::Clipboard(pending) if matches!(pending.dispatch, Err(Failure::Retry(_))) => {
-                        let PendingRestore { owner, saved, sequence, dispatch } = pending;
+                        let PendingRestore { _publication, owner, saved, sequence, dispatch } = pending;
                         // No input was accepted. Restore
                         // before another attempt, and never overwrite a new copy.
                         if !restore_if_current(&owner, &saved, sequence)? {
@@ -433,6 +441,11 @@ fn prepare_paste(
         super::edit::insert(&current, selection, text, cancel)?;
         return Ok(Prepared::NativeEdit);
     }
+    let publication = CLIPBOARD_PUBLICATION.try_lock().map_err(|_| {
+        Failure::Retry(
+            "The previous paste is restoring your clipboard. Your text is preserved.".into(),
+        )
+    })?;
     let owner = Owner::new()?;
     // One lock attempt per tick; do not consume the budget in nested sleeps.
     let lock = unsafe { OpenClipboard(Some(owner.0)) }
@@ -523,6 +536,7 @@ fn prepare_paste(
         dispatch = delivery::input_dispatch(accepted);
     }
     Ok(Prepared::Clipboard(PendingRestore {
+        _publication: publication,
         owner,
         saved,
         sequence,
@@ -550,6 +564,7 @@ fn snapshot_failure(error: String) -> Failure {
 }
 fn restore_later(pending: PendingRestore) -> String {
     let PendingRestore {
+        _publication,
         owner,
         saved,
         sequence,
@@ -605,6 +620,22 @@ mod integration_tests {
     use super::*;
     use std::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+    #[test]
+    fn pending_restoration_prevents_nested_transcript_snapshots() {
+        // No clipboard access or real window: check the actual pending object's
+        // lifetime, including delayed restoration, rather than its worker count.
+        let publication = CLIPBOARD_PUBLICATION.lock().unwrap();
+        let pending = PendingRestore {
+            _publication: publication,
+            owner: Owner(HWND::default()),
+            saved: vec![],
+            sequence: 0,
+            dispatch: Ok(()),
+        };
+        assert!(CLIPBOARD_PUBLICATION.try_lock().is_err());
+        drop(pending);
+        assert!(CLIPBOARD_PUBLICATION.try_lock().is_ok());
+    }
     #[test]
     fn transient_inspection_and_rendering_retry_without_weakening_protection() {
         for error in [

@@ -22,7 +22,7 @@ Windows CI also tests a real offline CPU transcription fixture, builds the insta
 
 Regression fixtures cover text history beyond 1,000 records and older years, migration/restart, retries without double counting, cache/deletion behavior, exact 10,000-word boundaries, leap years, local dates, streaks, chart ranges, pagination/search/export, transient prompt drafts, editing preferences and explicit preview approval. Keyword-derived profiles are deterministic estimates; mock provider responses do not establish live prompt quality.
 
-Paste regressions cover a virtual five-second retry window with 100-ms intervals, slow attempts sharing that budget, recovery after transient failures, cancellation between attempts, and no replay after partial or accepted input. A browser IPC fixture checks that History requests an immediate paste of the chosen transcript. These checks do not prove receipt in an arbitrary Windows application; live retry and History-to-field delivery still require acceptance testing.
+Paste regressions cover a virtual five-second retry window with 100-ms intervals, slow attempts sharing that budget, recovery after transient failures, cancellation between attempts, no replay after partial or accepted input, and exclusive publication through the pending-restore lifetime. A browser IPC fixture checks that History requests an immediate paste of the chosen transcript. These checks do not prove receipt in an arbitrary Windows application; live retry and History-to-field delivery still require acceptance testing.
 
 ## Interactive compatibility checks
 

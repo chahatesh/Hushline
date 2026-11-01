@@ -5,6 +5,7 @@
 - Retry temporary field-readiness, held modifiers, clipboard contention and rejected paste input every 100 ms for up to five seconds. Keep one bounded worker and never replay a partial or accepted edit.
 - Make the History paste button return to the receiving app and paste immediately, without another shortcut. Keep the selected transcript recoverable if Windows prevents delivery.
 - Keep clipboard text available for 1.5 seconds after dispatch for slower paste handlers, while preserving any newer copied content.
+- Serialize clipboard publication through restoration so back-to-back pastes cannot snapshot temporary transcript text as the user's original clipboard.
 - Wait for an available native worker within the delivery deadline instead of immediately rejecting another paste.
 
 ## 0.7.0 — 2026-10-30
