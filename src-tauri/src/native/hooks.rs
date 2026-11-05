@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Low-level hooks enqueue actions only. Audio, UI Automation, and HTTP never run here.
+use super::hook_recovery::{self, Activity, InputWindow, KeyEvent};
 use crate::{
     model::Shortcuts,
     shortcuts::{self, Action, Chord, ALT, CTRL, SHIFT, WIN},
@@ -11,19 +12,25 @@ use std::sync::{
 use windows::Win32::{
     Foundation::*,
     System::Threading::GetCurrentThreadId,
-    UI::{Accessibility::*, WindowsAndMessaging::*},
+    UI::{Accessibility::*, Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::*},
 };
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 static DICTATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPTURE_UNTIL: AtomicU64 = AtomicU64::new(0);
+// Only the most recent shortcut action's Windows tick; no typed text/history.
+static LAST_ACTION_TICK: AtomicU64 = AtomicU64::new(0);
+static LAST_ACTION_OBSERVED_MS: AtomicU64 = AtomicU64::new(0);
 static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
 const REFRESH_HOOKS: u32 = WM_APP + 41;
 /// Event-driven recovery; never polls keys or installs hooks from an input callback.
 pub fn refresh_hooks() {
+    request_refresh(false);
+}
+fn request_refresh(reset: bool) {
     let thread = HOOK_THREAD.load(Ordering::Acquire);
     if thread != 0 {
         unsafe {
-            let _ = PostThreadMessageW(thread, REFRESH_HOOKS, WPARAM(0), LPARAM(0));
+            let _ = PostThreadMessageW(thread, REFRESH_HOOKS, WPARAM(reset as usize), LPARAM(0));
         }
     }
 }
@@ -99,10 +106,17 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
         let mut msg = MSG::default();
         let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
         HOOK_THREAD.store(GetCurrentThreadId(), Ordering::Release);
-        let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0);
-        let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0);
-        match (keyboard_hook, mouse_hook) {
-            (Ok(mut k), Ok(mut m)) => {
+        let recovery = match InputWindow::new() {
+            Ok(window) => window,
+            Err(error) => {
+                HOOK_THREAD.store(0, Ordering::Release);
+                let _ = ready_tx.send(Err(error));
+                return;
+            }
+        };
+        let mut activity = Activity::default();
+        match HookPair::new() {
+            Ok(mut hooks) => {
                 let foreground = SetWinEventHook(
                     EVENT_SYSTEM_FOREGROUND,
                     EVENT_SYSTEM_FOREGROUND,
@@ -123,57 +137,54 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                 );
                 let _ = ready_tx.send(Ok(()));
                 while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                    if recovery.is_input(&msg) {
+                        if let Some(event) = recovery.read(&msg) {
+                            repair_from_input(&event, &mut activity, &mut hooks);
+                        }
+                        continue;
+                    }
+                    if recovery.is_device_change(&msg) {
+                        refresh_hooks();
+                        activity = Activity::default();
+                    }
                     if msg.message == REFRESH_HOOKS {
                         // Keep the old pair if Windows temporarily refuses a replacement.
-                        let next_keyboard =
-                            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0);
-                        let next_mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0);
-                        match (next_keyboard, next_mouse) {
-                            (Ok(next_k), Ok(next_m)) => {
-                                let _ = UnhookWindowsHookEx(k);
-                                let _ = UnhookWindowsHookEx(m);
-                                k = next_k;
-                                m = next_m;
-                                if STATE
-                                    .get()
-                                    .and_then(|s| s.lock().ok())
-                                    .is_some_and(|mut s| s.reset())
-                                {
-                                    if let Some(tx) = SENDER.get() {
-                                        let _ = tx.send(Action::Release);
-                                    }
+                        if hooks.replace() {
+                            let physical = hook_recovery::physical_keys(|key| {
+                                GetAsyncKeyState(key as i32) < 0
+                            });
+                            if let Some(lock) = STATE.get() {
+                                if let Ok(mut keys) = lock.lock() {
+                                    let actions = if msg.wParam.0 != 0 {
+                                        if keys.reset() {
+                                            vec![Action::Release]
+                                        } else {
+                                            vec![]
+                                        }
+                                    } else {
+                                        keys.repair(
+                                            physical,
+                                            0,
+                                            false,
+                                            DICTATION_ACTIVE.load(Ordering::Acquire),
+                                        )
+                                        .1
+                                    };
+                                    send_actions(actions, msg.time);
                                 }
                             }
-                            (next_k, next_m) => {
-                                if let Ok(next_k) = next_k {
-                                    let _ = UnhookWindowsHookEx(next_k);
-                                }
-                                if let Ok(next_m) = next_m {
-                                    let _ = UnhookWindowsHookEx(next_m);
-                                }
-                            }
+                            activity = Activity::default();
                         }
                         continue;
                     }
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
-                let _ = UnhookWindowsHookEx(k);
-                let _ = UnhookWindowsHookEx(m);
                 let _ = UnhookWinEvent(foreground);
                 let _ = UnhookWinEvent(desktop);
             }
-            (k, m) => {
-                if let Ok(k) = k {
-                    let _ = UnhookWindowsHookEx(k);
-                }
-                if let Ok(m) = m {
-                    let _ = UnhookWindowsHookEx(m);
-                }
-                let _ = ready_tx.send(Err(
-                    "Windows refused the global shortcuts. Reopen Hush at normal user permissions."
-                        .into(),
-                ));
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
             }
         }
         HOOK_THREAD.store(0, Ordering::Release);
@@ -182,10 +193,121 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
         .recv_timeout(std::time::Duration::from_secs(3))
         .map_err(|_| "Shortcut handler did not start.")?
 }
+struct HookPair {
+    keyboard: HHOOK,
+    mouse: HHOOK,
+}
+impl HookPair {
+    unsafe fn new() -> Result<Self, String> {
+        let error = "Windows refused the global shortcuts. Reopen Hush at normal user permissions.";
+        let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard), None, 0)
+            .map_err(|_| error.to_string())?;
+        match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), None, 0) {
+            Ok(mouse) => Ok(Self { keyboard, mouse }),
+            Err(_) => {
+                let _ = UnhookWindowsHookEx(keyboard);
+                Err(error.into())
+            }
+        }
+    }
+    unsafe fn replace(&mut self) -> bool {
+        if let Ok(next) = Self::new() {
+            *self = next;
+            true
+        } else {
+            false
+        }
+    }
+}
+impl Drop for HookPair {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = UnhookWindowsHookEx(self.keyboard);
+            let _ = UnhookWindowsHookEx(self.mouse);
+        }
+    }
+}
+fn send_actions(actions: Vec<Action>, tick: u32) {
+    if !actions.is_empty() {
+        LAST_ACTION_OBSERVED_MS.store(monotonic_ms(), Ordering::Release);
+        LAST_ACTION_TICK.store((1u64 << 32) | tick as u64, Ordering::Release);
+    }
+    if let Some(tx) = SENDER.get() {
+        for action in actions {
+            let _ = tx.send(action);
+        }
+    }
+}
+unsafe fn repair_from_input(event: &KeyEvent, activity: &mut Activity, hooks: &mut HookPair) {
+    let idle = activity.observe(monotonic_ms());
+    let Some(lock) = STATE.get() else { return };
+    let tracked = match lock.try_lock() {
+        Ok(keys) => keys.down[event.key as usize],
+        Err(_) => return,
+    };
+    // This is a raw-input message, outside the low-level callback. Windows has
+    // updated async state here; never query physical state inside keyboard().
+    let physical = GetAsyncKeyState(event.key as i32) < 0;
+    if !hook_recovery::needs_repair(idle, tracked, event.down, physical) || !hooks.replace() {
+        return;
+    }
+    let physical = hook_recovery::physical_keys(|key| GetAsyncKeyState(key as i32) < 0);
+    let last = LAST_ACTION_TICK.load(Ordering::Acquire);
+    // Tick comparisons only cover recent queued notifications; an action from
+    // weeks ago must not look newer after Windows' 32-bit tick wraps.
+    let recent = monotonic_ms().saturating_sub(LAST_ACTION_OBSERVED_MS.load(Ordering::Acquire))
+        <= hook_recovery::IDLE_REPAIR_MS;
+    let last = (last != 0 && recent).then_some(last as u32);
+    let replay = !hook_recovery::action_already_seen(last, event.tick)
+        && monotonic_ms() >= CAPTURE_UNTIL.load(Ordering::Acquire);
+    if let Ok(mut keys) = lock.lock() {
+        let (consumed, actions) = keys.repair(
+            physical,
+            event.key,
+            event.down && replay,
+            DICTATION_ACTIVE.load(Ordering::Acquire),
+        );
+        if replay && event.down && !modifier(event.key) && !consumed {
+            EPOCH.fetch_add(1, Ordering::SeqCst);
+        }
+        send_actions(actions, event.tick);
+    }
+}
 fn modifier(key: u16) -> bool {
     matches!(key,0x10..=0x12|0x5b..=0x5c|0xa0..=0xa5)
 }
 impl Keys {
+    fn repair(
+        &mut self,
+        physical: [bool; 256],
+        key: u16,
+        replay: bool,
+        active: bool,
+    ) -> (bool, Vec<Action>) {
+        self.down = physical;
+        for (consumed, down) in self.consumed.iter_mut().zip(physical) {
+            *consumed &= down;
+        }
+        let mut actions = vec![];
+        if replay && !active {
+            // A stale chord from a lost key-up must not suppress a new hold.
+            self.held = None;
+        } else if self
+            .held
+            .as_ref()
+            .is_some_and(|chord| !self.satisfied(chord))
+        {
+            self.held = None;
+            actions.push(Action::Release);
+        }
+        if replay && physical[key as usize] {
+            self.down[key as usize] = false;
+            let (consumed, replayed) = self.route(key, true, active);
+            actions.extend(replayed);
+            return (consumed, actions);
+        }
+        (self.consumed[key as usize], actions)
+    }
     fn reset(&mut self) -> bool {
         self.down.fill(false);
         self.consumed.fill(false);
@@ -262,6 +384,13 @@ impl Keys {
             if !modifier(key) || matches!(key, 0x5b | 0x5c) {
                 self.consumed[index] = true;
             }
+            // The Windows key may have arrived first, or its down event may
+            // have missed a removed hook. Swallow its eventual release too.
+            for windows_key in [0x5b, 0x5c] {
+                if self.down[windows_key] {
+                    self.consumed[windows_key] = true;
+                }
+            }
         }
         if self.held.as_ref().is_some_and(|c| !self.satisfied(c)) {
             self.held = None;
@@ -275,11 +404,13 @@ impl Keys {
         (was_consumed || self.consumed[index], actions)
     }
 }
-fn handle(key: u16, down: bool) -> bool {
+fn handle(key: u16, down: bool, tick: u32) -> bool {
     let Some(lock) = STATE.get() else {
         return false;
     };
-    let Ok(mut s) = lock.lock() else {
+    // Windows silently removes hooks that wait too long. Configuration/capture
+    // changes must never make an input callback wait for another thread.
+    let Ok(mut s) = lock.try_lock() else {
         return false;
     };
     if monotonic_ms() < CAPTURE_UNTIL.load(Ordering::SeqCst) && key <= 255 {
@@ -293,11 +424,7 @@ fn handle(key: u16, down: bool) -> bool {
     }
     let previous = (key <= 255).then(|| s.down[key as usize]);
     let (consumed, actions) = s.route(key, down, DICTATION_ACTIVE.load(Ordering::SeqCst));
-    for action in actions {
-        if let Some(tx) = SENDER.get() {
-            let _ = tx.send(action);
-        }
-    }
+    send_actions(actions, tick);
     if down && previous == Some(false) && !modifier(key) && !consumed {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
@@ -308,7 +435,7 @@ unsafe extern "system" fn keyboard(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         let info = &*(l.0 as *const KBDLLHOOKSTRUCT);
         if !(info.flags.contains(LLKHF_INJECTED) && info.dwExtraInfo == super::INPUT_TAG) {
             let down = w.0 == WM_KEYDOWN as usize || w.0 == WM_SYSKEYDOWN as usize;
-            if handle(info.vkCode as u16, down) {
+            if handle(info.vkCode as u16, down, info.time) {
                 return LRESULT(1);
             }
         }
@@ -321,7 +448,7 @@ unsafe extern "system" fn mouse(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if !(info.flags & 1 != 0 && info.dwExtraInfo == super::INPUT_TAG) {
             if w.0 == WM_XBUTTONDOWN as usize || w.0 == WM_XBUTTONUP as usize {
                 let key = if info.mouseData >> 16 == 1 { 5 } else { 6 };
-                if handle(key, w.0 == WM_XBUTTONDOWN as usize) {
+                if handle(key, w.0 == WM_XBUTTONDOWN as usize, info.time) {
                     return LRESULT(1);
                 }
             } else if invalidates_mouse(w.0 as u32, || super::overlay::contains_point(info.pt)) {
@@ -354,7 +481,7 @@ unsafe extern "system" fn focus_event(
 ) {
     if event == EVENT_SYSTEM_DESKTOPSWITCH {
         EPOCH.fetch_add(1, Ordering::SeqCst);
-        refresh_hooks();
+        request_refresh(true);
         return;
     }
     if invalidates_focus(event) {
@@ -371,6 +498,105 @@ fn invalidates_focus(event: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn physical(keys: &[u16]) -> [bool; 256] {
+        let mut down = [false; 256];
+        for key in keys {
+            down[*key as usize] = true;
+        }
+        down
+    }
+    #[test]
+    fn first_held_chord_recovers_when_both_hook_events_were_missed() {
+        for (ctrl, win) in [(0xa2, 0x5b), (0xa3, 0x5c)] {
+            for trigger in [ctrl, win] {
+                let mut s = keys();
+                assert_eq!(
+                    s.repair(physical(&[ctrl, win]), trigger, true, false).1,
+                    vec![Action::Push]
+                );
+                assert_eq!(s.route(win, false, true), (true, vec![Action::Release]));
+                assert!(s.route(ctrl, false, false).1.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn idle_repair_clears_a_stale_letter_and_a_stale_chord() {
+        let mut s = keys();
+        s.route(0x41, true, false); // Its key-up was lost while Windows was idle.
+        s.route(0xa2, true, false);
+        assert!(s.route(0x5b, true, false).1.is_empty());
+        assert_eq!(
+            s.repair(physical(&[0xa2, 0x5b]), 0x5b, true, false).1,
+            vec![Action::Push]
+        );
+        assert!(!s.down[0x41]);
+        // A stale held chord must not suppress the first fresh press in idle.
+        assert_eq!(
+            s.repair(physical(&[0xa2, 0x5b]), 0xa2, true, false).1,
+            vec![Action::Push]
+        );
+    }
+    #[test]
+    fn healthy_hold_is_not_released_or_restarted_by_maintenance() {
+        let mut s = keys();
+        s.route(0xa2, true, false);
+        assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
+        assert!(s
+            .repair(physical(&[0xa2, 0x5b]), 0xa2, false, true)
+            .1
+            .is_empty());
+        assert_eq!(s.route(0x5b, false, true).1, vec![Action::Release]);
+    }
+    #[test]
+    fn a_missing_release_finishes_once_and_an_abandoned_hold_does_not_restart() {
+        let mut s = keys();
+        s.route(0xa2, true, false);
+        s.route(0x5b, true, false);
+        assert_eq!(
+            s.repair(physical(&[]), 0x5b, false, true).1,
+            vec![Action::Release]
+        );
+        assert!(s.repair(physical(&[]), 0x5b, false, true).1.is_empty());
+        assert!(s.repair(physical(&[]), 0xa2, true, false).1.is_empty());
+        assert!(s.held.is_none());
+    }
+    #[test]
+    fn already_handled_hands_free_and_paste_are_not_dispatched_twice() {
+        for (key, expected) in [(0x20, Action::HandsFree), (0x56, Action::Paste)] {
+            let mut s = keys();
+            s.route(0xa2, true, false);
+            s.route(0x5b, true, false);
+            assert_eq!(s.route(key, true, true).1, vec![expected]);
+            assert!(s
+                .repair(physical(&[0xa2, 0x5b, key]), key, false, true)
+                .1
+                .is_empty());
+            assert!(s.route(key, false, true).1.is_empty());
+        }
+    }
+    #[test]
+    fn windows_first_also_swallows_windows_release_after_a_matched_chord() {
+        let mut s = keys();
+        s.route(0x5b, true, false);
+        assert_eq!(s.route(0xa2, true, false).1, vec![Action::Push]);
+        assert_eq!(s.route(0x5b, false, true), (true, vec![Action::Release]));
+    }
+    #[test]
+    #[ignore = "Registers and deliberately removes only this test process's native keyboard/mouse hooks, then reinstalls them. No injected input, microphone, clipboard, focus changes, or network. Run on the Windows CI desktop."]
+    fn native_hook_pair_can_be_reinstalled_after_removal() {
+        unsafe {
+            let mut message = MSG::default();
+            let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+            let _input = InputWindow::new().unwrap();
+            let mut hooks = HookPair::new().unwrap();
+            UnhookWindowsHookEx(hooks.keyboard).unwrap();
+            UnhookWindowsHookEx(hooks.mouse).unwrap();
+            assert!(hooks.replace());
+            // The replacement handles are live, not just non-null old values.
+            UnhookWindowsHookEx(hooks.keyboard).unwrap();
+            UnhookWindowsHookEx(hooks.mouse).unwrap();
+        }
+    }
     #[test]
     fn clicking_the_nonactivating_pill_to_stop_does_not_revoke_paste() {
         assert!(!invalidates_mouse(WM_LBUTTONDOWN, || true));

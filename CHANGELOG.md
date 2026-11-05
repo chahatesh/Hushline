@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2 — 2026-11-05
+
+- Repair shortcut listeners on the first keyboard input after a long idle period and when independent raw-input notifications reveal a missed key event. Recovery uses native input events, with no idle polling timer.
+- Reconcile currently held keys to clear missed releases, preserve a healthy hold during resume/maintenance, and recover a still-held Ctrl+Win chord without replaying handled actions or starting an abandoned hold.
+- Keep low-level input callbacks from waiting on configuration locks. Suppress Windows-key release in both modifier orders so a matched shortcut does not open Start.
+- Add simulated long-idle/state regressions and a Windows-only check that deliberately removes and reinstalls this test process's native listeners without injecting input.
+
 ## 0.7.1 — 2026-10-31
 
 - Retry temporary field-readiness, held modifiers, clipboard contention and rejected paste input every 100 ms for up to five seconds. Keep one bounded worker and never replay a partial or accepted edit.

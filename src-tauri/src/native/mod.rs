@@ -7,6 +7,8 @@ pub(crate) mod delivery;
 #[cfg(windows)]
 mod edit;
 #[cfg(windows)]
+mod hook_recovery;
+#[cfg(windows)]
 mod hooks;
 #[cfg(windows)]
 mod overlay;

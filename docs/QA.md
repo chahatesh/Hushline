@@ -18,6 +18,8 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 The ordinary test suite uses dummy keys and synthetic local HTTP/audio fixtures. It does not upload microphone recordings or use a saved Groq key. Browser tests run the interface preview, with no native microphone or text injection.
 
+Shortcut regressions simulate hours without input, missing key-down/up events, stale keys blocking Ctrl+Win, both modifier orders, an already-held healthy chord, abandoned holds, queued raw-input messages and duplicate-action prevention. A native test registers a hidden message-only recovery window. Windows CI separately removes and reinstalls only its own keyboard/mouse listeners without sending keyboard input. A physical multi-hour idle/lock/resume session still needs live acceptance; the simulation does not establish that result.
+
 Windows CI also tests a real offline CPU transcription fixture, builds the installer and portable ZIP, and exercises the external-signing packaging path. Signing tests use a temporary untrusted certificate without installing a trusted root. Their files are excluded from distribution artifacts.
 
 Regression fixtures cover text history beyond 1,000 records and older years, migration/restart, retries without double counting, cache/deletion behavior, exact 10,000-word boundaries, leap years, local dates, streaks, chart ranges, pagination/search/export, transient prompt drafts, editing preferences and explicit preview approval. Keyword-derived profiles are deterministic estimates; mock provider responses do not establish live prompt quality.
