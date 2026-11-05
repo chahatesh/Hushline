@@ -4,6 +4,39 @@ import { test, expect } from '@playwright/test';
 import { defaults, emptyView } from '../../src/types';
 import { previewStatistics, emptyStatistics } from '../../src/statistics-data';
 
+test('recognition comparison stays separate from formatting and can paste the recognized words', async ({page})=>{
+  await page.addInitScript(({defaults,emptyView})=>{
+    const host=window as unknown as Record<string,unknown>;host.isTauri=true;
+    host.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command:string,args:Record<string,unknown>)=>{
+      if(command==='snapshot')return {settings:defaults,view:{...emptyView,phase:'success',lastText:'A polished sentence.',recognizedText:'The complete recognized wording'},dictionary:[],snippets:[],styles:[],history:[],historySummary:{count:0,words:0,revision:0},savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+      if(command==='recover_text')host.__RECOGNIZED_PASTE__=args;
+    }};
+  },{defaults,emptyView});
+  await page.reload();await page.getByText('Before formatting',{exact:true}).click();
+  await expect(page.locator('.recognition-text')).toHaveText('The complete recognized wording');
+  await page.getByRole('button',{name:'Paste as recognized',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as Record<string,unknown>).__RECOGNIZED_PASTE__)).toEqual({text:'The complete recognized wording'});
+});
+
+test('microphone settings distinguish Windows system and calls inputs',async({page})=>{
+  await page.addInitScript(({defaults,emptyView})=>{
+    const host=window as unknown as Record<string,unknown>;host.isTauri=true;
+    host.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command:string,args:Record<string,unknown>)=>{
+      if(command==='snapshot')return {settings:defaults,view:emptyView,dictionary:[],snippets:[],styles:[],history:[],historySummary:{count:0,words:0,revision:0},savedAudio:[],diagnostics:[],scratchpad:'',startupEnabled:false,offline:{installed:[],engineVersion:'1.9.2'}};
+      if(command==='microphones')return ['Desk input','Headset input'];
+      if(command==='microphone_defaults')return {system:'Desk input',communications:'Headset input'};
+      if(command==='save_settings')host.__MICROPHONE_SETTINGS__=args.settings;
+      if(command==='action')host.__MICROPHONE_TEST__=args;
+    }};
+  },{defaults,emptyView});
+  await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).click();
+  const microphones=page.getByLabel('Microphone',{exact:true});
+  await expect(microphones.getByRole('option',{name:'Windows default microphone · Desk input',exact:true})).toHaveCount(1);
+  await microphones.selectOption('@communications');await page.getByRole('button',{name:'Use & test',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {__MICROPHONE_SETTINGS__?:{microphone:string}}).__MICROPHONE_SETTINGS__?.microphone)).toBe('@communications');
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as Record<string,unknown>).__MICROPHONE_TEST__)).toEqual({name:'test'});
+});
+
 test('history paste sends the chosen saved text immediately without a second shortcut', async ({ page }) => {
   await page.addInitScript(({ defaults, emptyView }) => {
     const host = window as unknown as Record<string, unknown>;

@@ -554,9 +554,10 @@ mod tests {
         let token = CancellationToken::new();
         offline.install("tiny", &token, |_| {}).await.unwrap();
         let started = std::time::Instant::now();
+        let wav = fs::read(fixture).unwrap();
         let speech = offline
             .transcribe(
-                fs::read(fixture).unwrap(),
+                wav.clone(),
                 &Settings {
                     provider: "offline".into(),
                     language: "en".into(),
@@ -578,5 +579,28 @@ mod tests {
             speech.language,
             speech.text.len()
         );
+        for (rate, inverted) in [(48000, true), (44100, false)] {
+            let capture = crate::audio::speech_fixture_through_capture(&wav, rate, inverted);
+            let speech = offline
+                .transcribe(
+                    capture.wav,
+                    &Settings {
+                        provider: "offline".into(),
+                        language: "en".into(),
+                        ..Settings::default()
+                    },
+                    "",
+                    &token,
+                )
+                .await
+                .unwrap();
+            assert!(
+                speech.text.to_lowercase().contains("country"),
+                "Converted public speech fixture lost words at {rate} Hz"
+            );
+            eprintln!(
+                "Capture-to-recognition fixture: rate={rate}, opposite_channels={inverted}, passed"
+            );
+        }
     }
 }

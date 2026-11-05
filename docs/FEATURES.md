@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Rust/Tauri/Solid desktop, original branding and MIT source | Implemented | Native build, interface tests, and installer checks. |
 | Groq speech recognition, language selection and vocabulary hints | Partially Implemented | Documented requests and HTTP regressions; public speech fixture verified. Full live dictation acceptance remains open. |
-| WASAPI capture and voice activity detection | Partially Implemented | Device frames, preparation/cancellation, and gap handling tested; broader device coverage pending. |
+| WASAPI capture and voice activity detection | Partially Implemented | Immediate capture with confirmation/cancellation, release tail, safe stereo mixing, speech category and active-only audio scheduling. Signal/encoder and public speech-to-offline tests; real hardware/voice accuracy coverage pending. |
 | Push-to-talk, hands-free, double-tap and custom shortcuts | Partially Implemented | Independent raw-input recovery after idle/missed hooks; stale-key and duplicate-action regressions plus native listener reinstallation checks. Physical long-idle and resume/unlock acceptance pending. |
 | Native voice bar and docking | Partially Implemented | Geometry and rendering tests; physical mixed-DPI/multi-monitor coverage pending. |
 | Native quick menu and one-hour widget snooze | Partially Implemented | Native menu construction, command/target guards and visibility deadline tests; physical menu and restored-focus acceptance pending. |

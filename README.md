@@ -98,6 +98,8 @@ Paste preparation automatically retries temporary failures every 100 ms for up t
 
 Shortcuts recover automatically after long idle periods: an independent Windows keyboard notification repairs missing listeners and stale held-key state. Recovery reacts to input, device changes and resume events; it has no background key-polling timer.
 
+Capture begins on activation, including during the confirmation pause, and keeps a short 120-ms tail after release to preserve word endings. The microphone stays stopped when idle. Settings shows the actual **Windows default** and **Windows calls** inputs separately; they can be different devices. **Before formatting** compares the latest recognized text with the final wording and offers **Paste as recognized**. That comparison is transient and is not added to history.
+
 Read the [privacy policy](PRIVACY.md), [offline guide](docs/OFFLINE.md), and [security policy](SECURITY.md).
 
 ## Build from source

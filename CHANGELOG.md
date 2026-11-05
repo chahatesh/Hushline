@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.3 — 2026-11-05
+
+- Start microphone capture on activation instead of discarding audio during the configured confirmation pause. Keep abandoned-hold cancellation and dark preparation feedback; play the cue on first samples.
+- Retain a 120-ms release tail for final sounds. Give capture temporary Windows audio scheduling priority and more endpoint-buffer headroom without an idle recording loop or added packet-batching delay.
+- Prevent opposite-polarity channels from cancelling voice, exclude effectively silent channels from averaging, and sanitize invalid samples per channel. Keep quiet words and all sample timing intact.
+- Show the actual Windows default/calls microphone names as separate choices, preserving existing selections.
+- Add a transient Before formatting comparison and Paste as recognized action so recognition and AI wording can be distinguished. This comparison is not saved to history or diagnostics.
+- Extend public speech-fixture checks through 44.1/48-kHz stereo downmix, resampling, WAV encoding and real offline recognition.
+
 ## 0.7.2 — 2026-11-05
 
 - Repair shortcut listeners on the first keyboard input after a long idle period and when independent raw-input notifications reveal a missed key event. Recovery uses native input events, with no idle polling timer.

@@ -1,17 +1,74 @@
 // SPDX-License-Identifier: MIT
 //! One thread owns the stopped, reusable WASAPI client. Start/Stop/Reset are
 //! synchronous, so a new recording cannot inherit samples from the previous one.
+#[cfg(test)]
+use super::signal::decode;
+use super::signal::MonoMixer;
 use windows::{
-    core::GUID,
+    core::{w, Interface, GUID},
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
+        Foundation::HANDLE,
         Media::Audio::*,
-        System::Com::{
-            StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
-            *,
+        System::{
+            Com::{
+                StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
+                *,
+            },
+            Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW},
         },
     },
 };
+pub(super) const CALLS_DEVICE: &str = "@communications";
+struct AudioPriority(HANDLE);
+impl AudioPriority {
+    fn enter() -> Option<Self> {
+        let mut index = 0;
+        unsafe { AvSetMmThreadCharacteristicsW(w!("Audio"), &mut index) }
+            .ok()
+            .map(Self)
+    }
+}
+impl Drop for AudioPriority {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = AvRevertMmThreadCharacteristics(self.0);
+        }
+    }
+}
+#[derive(serde::Serialize)]
+pub struct InputDefaults {
+    pub system: Option<String>,
+    pub communications: Option<String>,
+}
+pub fn input_defaults() -> Result<InputDefaults, String> {
+    let _com = Apartment::enter()?;
+    unsafe {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|_| "Windows could not list default microphones.")?;
+        Ok(InputDefaults {
+            system: enumerator
+                .GetDefaultAudioEndpoint(eCapture, eConsole)
+                .ok()
+                .and_then(|d| friendly_name(&d)),
+            communications: enumerator
+                .GetDefaultAudioEndpoint(eCapture, eCommunications)
+                .ok()
+                .and_then(|d| friendly_name(&d)),
+        })
+    }
+}
+unsafe fn default_device(enumerator: &IMMDeviceEnumerator, selection: &str) -> Option<IMMDevice> {
+    if selection == CALLS_DEVICE {
+        enumerator
+            .GetDefaultAudioEndpoint(eCapture, eCommunications)
+            .ok()
+            .or_else(|| enumerator.GetDefaultAudioEndpoint(eCapture, eConsole).ok())
+    } else {
+        enumerator.GetDefaultAudioEndpoint(eCapture, eConsole).ok()
+    }
+}
 
 pub struct Apartment;
 impl Apartment {
@@ -35,6 +92,8 @@ pub struct Stream {
     channels: usize,
     bytes: usize,
     float: bool,
+    mixer: MonoMixer,
+    priority: Option<AudioPriority>,
     running: bool,
     seen_packet: bool,
     next_position: Option<u64>,
@@ -53,8 +112,8 @@ impl Stream {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .map_err(|_| "Windows could not list your microphones.")?;
-            let device = if name.is_empty() {
-                enumerator.GetDefaultAudioEndpoint(eCapture, eConsole).ok()
+            let device = if name.is_empty() || name == CALLS_DEVICE {
+                default_device(&enumerator, name)
             } else {
                 let devices = enumerator
                     .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
@@ -73,6 +132,15 @@ impl Stream {
             let client: IAudioClient = device.Activate(CLSCTX_ALL, None).map_err(|_| {
                 "Cannot access your microphone. Check Windows microphone permissions."
             })?;
+            // Tell Windows this is voice capture, allowing endpoint speech
+            // processing where provided. Unsupported drivers retain defaults.
+            if let Ok(speech) = client.cast::<IAudioClient2>() {
+                let _ = speech.SetClientProperties(&AudioClientProperties {
+                    cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
+                    eCategory: AudioCategory_Speech,
+                    ..Default::default()
+                });
+            }
             let format = client
                 .GetMixFormat()
                 .map_err(|_| "Cannot read your microphone's audio format.")?;
@@ -97,9 +165,10 @@ impl Stream {
                 && value.nSamplesPerSec >= 8000
                 && value.nSamplesPerSec <= 384000
                 && value.nBlockAlign as usize == bytes * value.nChannels as usize;
-            // Endpoint capacity; available packets are drained every 20 ms.
+            // Capacity is scheduling headroom, not a wait before returning
+            // samples. Drain every 20 ms without a 500-ms batching delay.
             let initialized = if valid {
-                client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2_000_000, 0, format, None)
+                client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 5_000_000, 0, format, None)
             } else {
                 Err(windows::core::Error::from_hresult(
                     windows::Win32::Foundation::E_INVALIDARG,
@@ -120,6 +189,8 @@ impl Stream {
                 channels: value.nChannels as usize,
                 bytes,
                 float,
+                mixer: MonoMixer::default(),
+                priority: None,
                 running: false,
                 seen_packet: false,
                 next_position: None,
@@ -135,10 +206,13 @@ impl Stream {
         }
     }
     pub fn start(&mut self) -> Result<(), String> {
+        let priority = AudioPriority::enter();
         unsafe { self.client.Reset().and_then(|_| self.client.Start()) }.map_err(|_| {
             "Your microphone could not start. Check the device and Windows permissions."
         })?;
         self.running = true;
+        self.priority = priority;
+        self.mixer.reset();
         self.seen_packet = false;
         self.next_position = None;
         self.gaps = 0;
@@ -152,16 +226,10 @@ impl Stream {
         if self.selection != name {
             return false;
         }
-        if !name.is_empty() {
+        if !name.is_empty() && name != CALLS_DEVICE {
             return true;
         }
-        unsafe {
-            self.enumerator
-                .GetDefaultAudioEndpoint(eCapture, eConsole)
-                .ok()
-                .and_then(|d| device_id(&d))
-        }
-        .as_ref()
+        unsafe { default_device(&self.enumerator, name).and_then(|d| device_id(&d)) }.as_ref()
             == Some(&self.device_id)
     }
     pub fn requires_review(&self) -> bool {
@@ -169,9 +237,11 @@ impl Stream {
     }
     pub fn stop(&mut self) -> Result<(), String> {
         if self.running {
-            unsafe { self.client.Stop() }
-                .map_err(|_| "Your microphone disconnected during recording.")?;
+            let result = unsafe { self.client.Stop() }
+                .map_err(|_| "Your microphone disconnected during recording.".to_string());
             self.running = false;
+            self.priority = None;
+            result?;
         }
         Ok(())
     }
@@ -224,25 +294,17 @@ impl Stream {
                 } else {
                     None
                 };
-                for frame in 0..frames as usize {
-                    let value =
-                        if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || pointer.is_null() {
-                            0.0
-                        } else {
-                            let data = std::slice::from_raw_parts(
-                                pointer.add(frame * self.channels * self.bytes),
-                                self.channels * self.bytes,
-                            );
-                            data.chunks_exact(self.bytes)
-                                .map(|v| decode(v, self.float))
-                                .sum::<f32>()
-                                / self.channels as f32
-                        };
-                    append(if value.is_finite() {
-                        value.clamp(-1.0, 1.0)
-                    } else {
-                        0.0
-                    });
+                if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || pointer.is_null() {
+                    for _ in 0..frames {
+                        append(0.0);
+                    }
+                } else {
+                    let data = std::slice::from_raw_parts(
+                        pointer,
+                        frames as usize * self.channels * self.bytes,
+                    );
+                    self.mixer
+                        .append(data, self.channels, self.bytes, self.float, &mut append);
                 }
                 self.capture
                     .ReleaseBuffer(frames)
@@ -283,20 +345,6 @@ unsafe fn device_id(device: &IMMDevice) -> Option<String> {
     let result = id.to_string().ok();
     CoTaskMemFree(Some(id.0 as *const _));
     result
-}
-fn decode(bytes: &[u8], float: bool) -> f32 {
-    if float {
-        return f32::from_le_bytes(bytes.try_into().unwrap());
-    }
-    match bytes.len() {
-        2 => i16::from_le_bytes(bytes.try_into().unwrap()) as f32 / 32768.0,
-        3 => {
-            ((bytes[0] as i32 | (bytes[1] as i32) << 8 | (bytes[2] as i32) << 16) << 8 >> 8) as f32
-                / 8_388_608.0
-        }
-        4 => i32::from_le_bytes(bytes.try_into().unwrap()) as f32 / 2_147_483_648.0,
-        _ => 0.0,
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -369,7 +417,9 @@ mod tests {
         stream.lost_frames = 0;
         stream.largest_gap = 0;
         stream.packets.clear();
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        std::thread::sleep(std::time::Duration::from_millis(
+            buffer as u64 * 1000 / stream.rate as u64 + 750,
+        ));
         let mut retained = 0;
         let mut result = Ok(());
         for _ in 0..10 {

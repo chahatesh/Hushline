@@ -90,6 +90,7 @@ struct Completed {
     recovery_id: Option<String>,
     audio_id: Option<String>,
     text: String,
+    recognized_text: String,
     target: Result<Target, String>,
     origin: Option<native::FocusAnchor>,
     preview: bool,
@@ -431,6 +432,7 @@ fn begin(
     };
     publish(app, state, |v| {
         v.phase = "starting".into();
+        v.recognized_text = None;
         v.stage = "arming".into();
         v.message = "Getting ready".into();
         v.level = 0.0;
@@ -454,7 +456,7 @@ fn begin(
         tokio::time::sleep(Duration::from_millis(pause as u64 + 5000)).await;
         let _ = tx.send(Message::StartupTimeout(id));
     });
-    Session {
+    let mut session = Session {
         id,
         capture: None,
         held: true,
@@ -470,7 +472,11 @@ fn begin(
         test,
         ready: false,
         stopping: false,
-    }
+    };
+    // Capture the beginning of speech immediately. The configurable pause is
+    // confirmation/feedback only, not discarded microphone time.
+    start_capture(state, &mut session);
+    session
 }
 fn start_capture(state: &AppState, session: &mut Session) {
     if session.capture.is_some()
@@ -495,7 +501,7 @@ fn start_capture(state: &AppState, session: &mut Session) {
     });
 }
 fn has_audio(session: &Session) -> bool {
-    session.ready || session.capture.as_ref().is_some_and(|c| c.is_ready())
+    session.arm_elapsed && (session.ready || session.capture.as_ref().is_some_and(|c| c.is_ready()))
 }
 fn stop_capture(session: &mut Session) {
     session.stopping = true;
@@ -704,6 +710,7 @@ async fn process(
         recovery_id: session.recovery_id,
         audio_id: session.audio_id,
         text: output,
+        recognized_text: spoken,
         target,
         origin: if session.command {
             None
@@ -809,6 +816,7 @@ mod capture_quality_tests {
             recovery_id: None,
             audio_id: None,
             text: "Public complete transcript".into(),
+            recognized_text: "Public complete transcript".into(),
             target,
             origin: job.origin,
             preview: false,
@@ -933,6 +941,19 @@ mod capture_quality_tests {
             .unwrap();
         assert_eq!(target.hwnd, 42);
         task.await.unwrap();
+    }
+    #[test]
+    fn early_capture_requires_confirmation_and_cannot_revive_an_abandoned_hold() {
+        let mut session = test_session(ready_target(Err("fixture".into())));
+        session.ready = true;
+        assert!(
+            !has_audio(&session),
+            "Early samples do not confirm an abandoned tap"
+        );
+        session.arm_elapsed = true;
+        assert!(has_audio(&session));
+        session.held = false;
+        assert!(!lifecycle::may_start(session.held, session.hands_free));
     }
     #[tokio::test]
     async fn temporarily_busy_native_worker_waits_then_runs_once() {
@@ -1190,6 +1211,11 @@ fn finish_completed(
     }
     publish(app, state, |v| {
         v.last_text = done.text.clone();
+        v.recognized_text = if done.preview {
+            None
+        } else {
+            Some(done.recognized_text.clone())
+        };
         v.recoverable = !inserted && !done.preview && !done.text.is_empty();
         v.phase = if done.preview {
             "preview"
@@ -1435,6 +1461,7 @@ async fn actor(
                 v.phase = "idle".into();
                 v.stage.clear();
                 v.last_text = text;
+                v.recognized_text = None;
                 v.preview = None;
                 v.original = None;
                 v.preview_id = None;
@@ -1789,6 +1816,9 @@ async fn actor(
                             v.message = "Starting microphone".into();
                         });
                         start_capture(&state, s);
+                    }
+                    if s.capture.as_ref().is_some_and(|c| c.is_ready()) && !s.stopping {
+                        let _ = state.tx.send(Message::Audio(id, audio::Event::Ready));
                     }
                 }
             }
@@ -2156,6 +2186,8 @@ async fn actor(
                         if s.settings.recording_cue_enabled {
                             native::play_recording_cue();
                         }
+                    }
+                    if s.arm_elapsed {
                         publish(&app, &state, |v| {
                             v.phase = "listening".into();
                             v.stage = "recording".into();
@@ -2613,6 +2645,12 @@ fn microphones() -> Result<Vec<String>, String> {
     audio::devices()
 }
 #[tauri::command]
+async fn microphone_defaults() -> Result<audio::InputDefaults, String> {
+    tauri::async_runtime::spawn_blocking(audio::input_defaults)
+        .await
+        .map_err(|_| "Windows microphone inspection failed.".to_string())?
+}
+#[tauri::command]
 async fn available_models(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
     let key = native::read_key()?;
     state.groq.models(&key, &CancellationToken::new()).await
@@ -2889,6 +2927,7 @@ pub fn run() {
             save_api_key,
             delete_api_key,
             microphones,
+            microphone_defaults,
             available_models,
             delete_history,
             retry_audio,

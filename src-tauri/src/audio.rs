@@ -11,8 +11,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
+mod signal;
 mod wasapi;
+pub use wasapi::{input_defaults, InputDefaults};
 const READ_INTERVAL: Duration = Duration::from_millis(20);
+const RELEASE_TAIL: Duration = Duration::from_millis(120);
 
 #[derive(Debug)]
 pub enum Event {
@@ -88,8 +91,15 @@ struct Active {
     last_packet: Instant,
     limit_reached: bool,
     requires_review: bool,
+    stop_after: Option<Instant>,
 }
 impl Active {
+    fn request_stop(&mut self, now: Instant) {
+        self.stop_after.get_or_insert(now + RELEASE_TAIL);
+    }
+    fn tail_complete(&self, now: Instant) -> bool {
+        self.stop_after.is_some_and(|until| now >= until)
+    }
     fn read(&mut self, stream: &mut wasapi::Stream) -> Result<(), String> {
         let start = self.samples.len();
         let mut power = 0.0;
@@ -222,6 +232,7 @@ fn begin(request: &Start, stream: &mut Option<wasapi::Stream>) -> Result<Active,
         last_packet: Instant::now(),
         limit_reached: false,
         requires_review: false,
+        stop_after: None,
     })
 }
 fn finish(
@@ -315,9 +326,15 @@ fn worker(rx: mpsc::Receiver<Request>) {
             }
             Ok(Request::Stop(id, cancel)) => {
                 if active.as_ref().is_some_and(|v| v.request.id == id) {
-                    finish(active.take().unwrap(), &mut stream, cancel, None);
-                    if !configured.prepare_microphone {
-                        stream = None;
+                    if cancel {
+                        finish(active.take().unwrap(), &mut stream, true, None);
+                        if !configured.prepare_microphone {
+                            stream = None;
+                        }
+                    } else if let Some(recording) = active.as_mut() {
+                        // Keep the last consonant while hardware/driver audio
+                        // is still arriving. Repeated Stop must not extend it.
+                        recording.request_stop(Instant::now());
                     }
                 }
             }
@@ -350,7 +367,8 @@ fn worker(rx: mpsc::Receiver<Request>) {
             recording.limit_reached = frames >= recording.max
                 || recording.started.elapsed()
                     >= Duration::from_secs(recording.request.settings.max_seconds as u64);
-            let stopped = recording.limit_reached
+            let stopped = recording.tail_complete(Instant::now())
+                || recording.limit_reached
                 || silence_expired(
                     frames,
                     recording.last_voice,
@@ -416,6 +434,66 @@ fn silence_expired(
     hands_free
         && seconds > 0
         && frames.saturating_sub(last_voice) > rate as usize * seconds as usize
+}
+#[cfg(test)]
+pub(crate) fn speech_fixture_through_capture(wav: &[u8], rate: u32, inverted: bool) -> Recording {
+    let reader = hound::WavReader::new(Cursor::new(wav)).unwrap();
+    let source_rate = reader.spec().sample_rate;
+    assert_eq!(reader.spec().channels, 1);
+    let source: Vec<f32> = reader
+        .into_samples::<i16>()
+        .map(|v| v.unwrap() as f32 / 32768.0)
+        .collect();
+    let frames = source.len() * rate as usize / source_rate as usize;
+    let mut stereo = Vec::with_capacity(frames * 8);
+    for i in 0..frames {
+        let position = i as f64 * source_rate as f64 / rate as f64;
+        let index = position.floor() as usize;
+        let fraction = (position - index as f64) as f32;
+        let value =
+            source[index] * (1.0 - fraction) + source[(index + 1).min(source.len() - 1)] * fraction;
+        stereo.extend_from_slice(&value.to_le_bytes());
+        stereo.extend_from_slice(&(if inverted { -value } else { 0.0f32 }).to_le_bytes());
+    }
+    let mut mixer = signal::MonoMixer::default();
+    let mut samples = Vec::with_capacity(frames);
+    // Same packet-sized decode/downmix and recording encoder as live capture.
+    for packet in stereo.chunks((rate as usize / 50) * 8) {
+        mixer.append(packet, 2, 4, true, |v| samples.push(v));
+    }
+    let now = Instant::now();
+    let (events, _) = mpsc::channel();
+    let active = Active {
+        request: Start {
+            id: 1,
+            settings: Settings::default(),
+            events,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            silence: Arc::new(AtomicBool::new(false)),
+            ready: Arc::new(AtomicBool::new(true)),
+        },
+        voice_frames: samples
+            .chunks((rate / 50) as usize)
+            .filter(|p| p.iter().map(|v| v * v).sum::<f32>() / p.len() as f32 >= 0.012f32.powi(2))
+            .map(|p| p.len())
+            .sum(),
+        samples,
+        rate,
+        max: frames + 1,
+        rms: 0.0,
+        last_voice: frames,
+        started: now,
+        last_packet: now,
+        limit_reached: false,
+        requires_review: false,
+        stop_after: None,
+    };
+    let result = encode(&active).unwrap();
+    assert!(
+        result.speech_detected,
+        "Capture conversion must retain speech"
+    );
+    result
 }
 /// A 32-tap Hann-windowed sinc low-pass avoids naive-decimation aliasing.
 fn resample(samples: &[f32], rate: u32) -> Vec<f32> {
@@ -484,7 +562,7 @@ mod tests {
     fn quiet_capture_still_produces_recoverable_audio() {
         let (events, _) = mpsc::channel();
         let now = Instant::now();
-        let active = Active {
+        let mut active = Active {
             request: Start {
                 id: 1,
                 settings: Settings::default(),
@@ -503,7 +581,15 @@ mod tests {
             last_packet: now,
             limit_reached: false,
             requires_review: false,
+            stop_after: None,
         };
+        active.request_stop(now);
+        active.request_stop(now + Duration::from_millis(80));
+        assert!(!active.tail_complete(now + Duration::from_millis(119)));
+        assert!(
+            active.tail_complete(now + Duration::from_millis(120)),
+            "Repeated stop must not extend the release tail"
+        );
         let recording =
             encode(&active).expect("Quiet audio should be retained for explicit listening/retry");
         assert_eq!(recording.wav.len(), 32044);
@@ -533,6 +619,7 @@ mod tests {
                 last_packet: now,
                 limit_reached: false,
                 requires_review: false,
+                stop_after: None,
             };
             finish(
                 active,
@@ -720,6 +807,7 @@ mod tests {
             last_packet: Instant::now(),
             limit_reached: false,
             requires_review: false,
+            stop_after: None,
         };
         let result = encode(&active).unwrap();
         assert_eq!(result.duration_ms, 125000);

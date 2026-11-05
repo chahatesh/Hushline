@@ -338,6 +338,7 @@ pub struct View {
     pub level: f32,
     pub seconds: f32,
     pub last_text: String,
+    pub recognized_text: Option<String>,
     pub recoverable: bool,
     pub preview: Option<String>,
     pub original: Option<String>,

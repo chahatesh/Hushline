@@ -29,3 +29,5 @@ Private sessions do not enter history, statistics, or profiles. Existing history
 The installer may obtain the Microsoft WebView2 system runtime when needed. Explicit project/documentation links open the associated websites. Code signing uses build binaries and GitHub metadata only; user profiles are never signing inputs. A trusted signature does not change the application's inference or storage choices.
 
 Provider references and retention choices are also documented in [README](README.md#privacy) and [Architecture](ARCHITECTURE.md). Report security concerns using [SECURITY.md](SECURITY.md).
+
+The dashboard can show the most recent speech-recognition result before formatting or AI rewriting. This comparison stays in the running app's memory, is cleared on new recording/restart, and is excluded from automatic history, profiles, diagnostics and configuration exports. Pasting or copying it is an explicit action.

@@ -21,6 +21,7 @@ export async function call<T = void>(command: string, args: Record<string, unkno
     case 'save_styles': data.styles = args.entries as Snapshot['styles']; break;
     case 'save_scratchpad': data.scratchpad = String(args.content); break;
     case 'microphones': result = []; break;
+    case 'microphone_defaults': result = {system:null,communications:null}; break;
     case 'set_shortcut_capture': break;
     case 'delete_saved_audio': data.savedAudio = data.savedAudio.filter(a => a.id !== args.id); break;
     case 'delete_history': data.savedAudio = args.id ? data.savedAudio.filter(a => !data.history.some(t => t.id === args.id && t.audioId === a.id)) : []; data.history = args.id ? data.history.filter(t => t.id !== args.id) : []; break;

@@ -346,3 +346,7 @@
 .saved-audio>.field-note {padding:16px 24px;}
 
 .notice>span {min-width:0;overflow-wrap:anywhere;} .notice>svg {flex-shrink:0;}
+
+.recognition-details { margin-block: 16px; padding: 20px; }
+.recognition-details summary { cursor: pointer; font-weight: 600; }
+.recognition-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; user-select: text; }
