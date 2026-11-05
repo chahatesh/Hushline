@@ -1448,6 +1448,7 @@ async fn actor(
                 if window.hide().is_err() {
                     publish(&app, &state, |v| {
                         v.last_text = text;
+                        v.recognized_text = None;
                         v.recoverable = true;
                         v.warning =
                             "Hush could not return to your text box. Focus it and use Paste last."
@@ -2665,8 +2666,7 @@ fn delete_history(state: State<Arc<AppState>>, id: Option<String>) -> Result<(),
     state.recovery.delete_history(&state.store, id)?;
     if clear_last {
         let mut view = state.view.lock().map_err(|_| "State unavailable")?;
-        view.last_text.clear();
-        view.recoverable = false;
+        view.clear_last_transcript();
         native::update_overlay(&view);
     }
     Ok(())

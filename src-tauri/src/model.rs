@@ -349,6 +349,32 @@ pub struct View {
     pub generation: u64,
     pub warning: String,
 }
+impl View {
+    pub fn clear_last_transcript(&mut self) {
+        self.last_text.clear();
+        self.recognized_text = None;
+        self.recoverable = false;
+    }
+}
+
+#[cfg(test)]
+mod transient_recognition_tests {
+    use super::*;
+    #[test]
+    fn clearing_a_transcript_also_deletes_the_transient_recognition() {
+        let mut view = View {
+            last_text: "Final fixture".into(),
+            recognized_text: Some("Recognized fixture".into()),
+            recoverable: true,
+            ..View::default()
+        };
+        view.clear_last_transcript();
+        let json = serde_json::to_value(view).unwrap();
+        assert_eq!(json["lastText"], "");
+        assert!(json["recognizedText"].is_null());
+        assert_eq!(json["recoverable"], false);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
