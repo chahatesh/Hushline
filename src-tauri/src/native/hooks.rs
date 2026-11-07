@@ -516,12 +516,8 @@ mod tests {
         }
         down
     }
-    fn press(key: u16) -> Option<KeyEvent> {
-        Some(KeyEvent {
-            key,
-            down: true,
-            tick: 0,
-        })
+    fn key_event(key: u16, down: bool) -> Option<KeyEvent> {
+        Some(KeyEvent { key, down, tick: 0 })
     }
     #[test]
     fn first_held_chord_recovers_when_both_hook_events_were_missed() {
@@ -529,8 +525,13 @@ mod tests {
             for trigger in [ctrl, win] {
                 let mut s = keys();
                 assert_eq!(
-                    s.repair(physical(&[ctrl, win]), press(trigger), true, false)
-                        .1,
+                    s.repair(
+                        physical(&[ctrl, win]),
+                        key_event(trigger, true),
+                        true,
+                        false
+                    )
+                    .1,
                     vec![Action::Push]
                 );
                 assert_eq!(s.route(win, false, true), (true, vec![Action::Release]));
@@ -545,14 +546,14 @@ mod tests {
         s.route(0xa2, true, false);
         assert!(s.route(0x5b, true, false).1.is_empty());
         assert_eq!(
-            s.repair(physical(&[0xa2, 0x5b]), press(0x5b), true, false)
+            s.repair(physical(&[0xa2, 0x5b]), key_event(0x5b, true), true, false)
                 .1,
             vec![Action::Push]
         );
         assert!(!s.down[0x41]);
         // A stale held chord must not suppress the first fresh press in idle.
         assert_eq!(
-            s.repair(physical(&[0xa2, 0x5b]), press(0xa2), true, false)
+            s.repair(physical(&[0xa2, 0x5b]), key_event(0xa2, true), true, false)
                 .1,
             vec![Action::Push]
         );
@@ -584,11 +585,7 @@ mod tests {
         let mut s = keys();
         s.route(0xa2, true, false);
         assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
-        let release = Some(KeyEvent {
-            key: 0x5b,
-            down: false,
-            tick: 0,
-        });
+        let release = key_event(0x5b, false);
         // A queued release with the key physically down is stale.
         assert!(s
             .repair(physical(&[0xa2, 0x5b]), release, false, true)
@@ -605,12 +602,16 @@ mod tests {
         let mut s = keys();
         s.route(0xa2, true, false);
         s.route(0x5b, true, false);
+        let release = key_event(0x5b, false);
         assert_eq!(
-            s.repair(physical(&[]), 0x5b, false, true).1,
+            s.repair(physical(&[]), release, false, true).1,
             vec![Action::Release]
         );
-        assert!(s.repair(physical(&[]), 0x5b, false, true).1.is_empty());
-        assert!(s.repair(physical(&[]), 0xa2, true, false).1.is_empty());
+        assert!(s.repair(physical(&[]), release, false, true).1.is_empty());
+        assert!(s
+            .repair(physical(&[]), key_event(0xa2, true), true, false)
+            .1
+            .is_empty());
         assert!(s.held.is_none());
     }
     #[test]
@@ -621,7 +622,12 @@ mod tests {
             s.route(0x5b, true, false);
             assert_eq!(s.route(key, true, true).1, vec![expected]);
             assert!(s
-                .repair(physical(&[0xa2, 0x5b, key]), key, false, true)
+                .repair(
+                    physical(&[0xa2, 0x5b, key]),
+                    key_event(key, true),
+                    false,
+                    true
+                )
                 .1
                 .is_empty());
             assert!(s.route(key, false, true).1.is_empty());
