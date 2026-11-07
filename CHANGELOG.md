@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.4 — 2026-11-06
+
+- Keep Ctrl+Win held during shortcut recovery when Windows omits a suppressed Win key from its key-state snapshot. A key-up observed through either input path still ends the hold.
+
 ## 0.7.3 — 2026-11-05
 
 - Start microphone capture on activation instead of discarding audio during the configured confirmation pause. Keep abandoned-hold cancellation and dark preparation feedback; play the cue on first samples.

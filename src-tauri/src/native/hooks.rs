@@ -164,7 +164,7 @@ pub fn start_hooks(s: &Shortcuts, tx: mpsc::Sender<Action>) -> Result<(), String
                                     } else {
                                         keys.repair(
                                             physical,
-                                            0,
+                                            None,
                                             false,
                                             DICTATION_ACTIVE.load(Ordering::Acquire),
                                         )
@@ -263,7 +263,7 @@ unsafe fn repair_from_input(event: &KeyEvent, activity: &mut Activity, hooks: &m
     if let Ok(mut keys) = lock.lock() {
         let (consumed, actions) = keys.repair(
             physical,
-            event.key,
+            Some(*event),
             event.down && replay,
             DICTATION_ACTIVE.load(Ordering::Acquire),
         );
@@ -279,15 +279,23 @@ fn modifier(key: u16) -> bool {
 impl Keys {
     fn repair(
         &mut self,
-        physical: [bool; 256],
-        key: u16,
+        mut physical: [bool; 256],
+        event: Option<KeyEvent>,
         replay: bool,
         active: bool,
     ) -> (bool, Vec<Action>) {
-        self.down = physical;
-        for (consumed, down) in self.consumed.iter_mut().zip(physical) {
-            *consumed &= down;
+        // A suppressed key may never have entered Windows' async state. Only
+        // an observed key-up (hook or raw input) may clear its held state.
+        if let Some(event) = event {
+            let index = event.key as usize;
+            if !event.down && !physical[index] {
+                self.consumed[index] = false;
+            }
         }
+        for (down, consumed) in physical.iter_mut().zip(self.consumed) {
+            *down |= consumed;
+        }
+        self.down = physical;
         let mut actions = vec![];
         if replay && !active {
             // A stale chord from a lost key-up must not suppress a new hold.
@@ -300,6 +308,9 @@ impl Keys {
             self.held = None;
             actions.push(Action::Release);
         }
+        let Some(key) = event.map(|event| event.key) else {
+            return (false, actions);
+        };
         if replay && physical[key as usize] {
             self.down[key as usize] = false;
             let (consumed, replayed) = self.route(key, true, active);
@@ -505,13 +516,21 @@ mod tests {
         }
         down
     }
+    fn press(key: u16) -> Option<KeyEvent> {
+        Some(KeyEvent {
+            key,
+            down: true,
+            tick: 0,
+        })
+    }
     #[test]
     fn first_held_chord_recovers_when_both_hook_events_were_missed() {
         for (ctrl, win) in [(0xa2, 0x5b), (0xa3, 0x5c)] {
             for trigger in [ctrl, win] {
                 let mut s = keys();
                 assert_eq!(
-                    s.repair(physical(&[ctrl, win]), trigger, true, false).1,
+                    s.repair(physical(&[ctrl, win]), press(trigger), true, false)
+                        .1,
                     vec![Action::Push]
                 );
                 assert_eq!(s.route(win, false, true), (true, vec![Action::Release]));
@@ -526,13 +545,15 @@ mod tests {
         s.route(0xa2, true, false);
         assert!(s.route(0x5b, true, false).1.is_empty());
         assert_eq!(
-            s.repair(physical(&[0xa2, 0x5b]), 0x5b, true, false).1,
+            s.repair(physical(&[0xa2, 0x5b]), press(0x5b), true, false)
+                .1,
             vec![Action::Push]
         );
         assert!(!s.down[0x41]);
         // A stale held chord must not suppress the first fresh press in idle.
         assert_eq!(
-            s.repair(physical(&[0xa2, 0x5b]), 0xa2, true, false).1,
+            s.repair(physical(&[0xa2, 0x5b]), press(0xa2), true, false)
+                .1,
             vec![Action::Push]
         );
     }
@@ -542,10 +563,42 @@ mod tests {
         s.route(0xa2, true, false);
         assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
         assert!(s
-            .repair(physical(&[0xa2, 0x5b]), 0xa2, false, true)
+            .repair(physical(&[0xa2, 0x5b]), None, false, true)
             .1
             .is_empty());
         assert_eq!(s.route(0x5b, false, true).1, vec![Action::Release]);
+    }
+    #[test]
+    fn maintenance_preserves_a_suppressed_windows_key_until_key_up() {
+        for (ctrl, win) in [(0xa2, 0x5b), (0xa3, 0x5c)] {
+            let mut s = keys();
+            s.route(ctrl, true, false);
+            assert_eq!(s.route(win, true, false), (true, vec![Action::Push]));
+            // Windows can omit a key Hush swallowed from the async snapshot.
+            assert!(s.repair(physical(&[ctrl]), None, false, true).1.is_empty());
+            assert_eq!(s.route(win, false, true), (true, vec![Action::Release]));
+        }
+    }
+    #[test]
+    fn raw_release_finishes_a_hold_if_the_hook_missed_it() {
+        let mut s = keys();
+        s.route(0xa2, true, false);
+        assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
+        let release = Some(KeyEvent {
+            key: 0x5b,
+            down: false,
+            tick: 0,
+        });
+        // A queued release with the key physically down is stale.
+        assert!(s
+            .repair(physical(&[0xa2, 0x5b]), release, false, true)
+            .1
+            .is_empty());
+        assert_eq!(
+            s.repair(physical(&[0xa2]), release, false, true).1,
+            vec![Action::Release]
+        );
+        assert_eq!(s.route(0x5b, true, false).1, vec![Action::Push]);
     }
     #[test]
     fn a_missing_release_finishes_once_and_an_abandoned_hold_does_not_restart() {
