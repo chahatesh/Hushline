@@ -12,7 +12,7 @@ use crate::{
     recovery::Recovery,
     shortcuts::Action,
     store::Store,
-    text,
+    text, update,
 };
 use std::{
     sync::{mpsc, Arc, Mutex, RwLock},
@@ -68,6 +68,7 @@ enum Message {
     Polishing(u64),
     Retry(String),
     RecoverySaved(u64, bool),
+    InstallUpdate(update::PreparedUpdate, oneshot::Sender<Result<(), String>>),
 }
 struct Session {
     id: u64,
@@ -1561,6 +1562,25 @@ async fn actor(
                 schedule_hide(&state, generation, lifecycle::RECOVERY_NOTICE_MS);
             }
             Message::DeferredPush(_) | Message::PasteSaved(_) => unreachable!(),
+            Message::InstallUpdate(update, result) => {
+                let busy = matches!(
+                    state.view.lock().unwrap().phase.as_str(),
+                    "starting" | "listening" | "processing" | "preview"
+                );
+                if busy || session.is_some() || pending.is_some() {
+                    let _ = result.send(Err(
+                        "Finish your dictation or preview before updating Hush.".into(),
+                    ));
+                    continue;
+                }
+                let started = update.handoff();
+                let exit = started.is_ok();
+                let _ = result.send(started);
+                if exit {
+                    app.exit(0);
+                    return;
+                }
+            }
             Message::RecoverySaved(id, in_memory) => {
                 let _ = app.emit_to("main", "recovery-updated", ());
                 if id == generation && !cancellation.is_cancelled() {
@@ -2900,6 +2920,28 @@ fn set_startup(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     .map_err(|_| "Windows startup preference could not be changed.".into())
 }
 
+#[tauri::command]
+async fn check_for_update() -> Result<update::UpdateStatus, String> {
+    update::check().await
+}
+
+#[tauri::command]
+async fn install_update(state: State<'_, Arc<AppState>>, version: String) -> Result<(), String> {
+    static INSTALL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = INSTALL
+        .try_lock()
+        .map_err(|_| "An update is already in progress.")?;
+    let update = update::prepare(&version).await?;
+    let (reply, outcome) = oneshot::channel();
+    state
+        .tx
+        .send(Message::InstallUpdate(update, reply))
+        .map_err(|_| "Hush is shutting down.")?;
+    outcome
+        .await
+        .map_err(|_| "Hush could not start the update.")?
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -2945,7 +2987,9 @@ pub fn run() {
             offline_status,
             install_offline,
             cancel_offline_download,
-            set_shortcut_capture
+            set_shortcut_capture,
+            check_for_update,
+            install_update
         ])
         .setup(|app| {
             let path = app.path().app_data_dir()?;
@@ -2963,6 +3007,7 @@ pub fn run() {
             let last_text = store
                 .last_text(settings.history_enabled)
                 .unwrap_or_default();
+            let update_failed = std::env::args().any(|s| s == "--update-failed");
             let state = Arc::new(AppState {
                 store,
                 settings: RwLock::new(settings.clone()),
@@ -2970,6 +3015,11 @@ pub fn run() {
                     phase: "idle".into(),
                     last_text,
                     has_key: native::read_key().is_ok(),
+                    warning: if update_failed {
+                        "The update could not finish. Hush reopened your previous version.".into()
+                    } else {
+                        String::new()
+                    },
                     ..View::default()
                 }),
                 tx: tx.clone(),
@@ -3053,7 +3103,7 @@ pub fn run() {
             refresh_profiles(app.handle(), &state);
             tauri::async_runtime::spawn(actor(app.handle().clone(), state, rx));
             if !std::env::args().any(|s| s == "--background") {
-                show(app.handle(), None);
+                show(app.handle(), update_failed.then_some("Settings"));
             }
             Ok(())
         })

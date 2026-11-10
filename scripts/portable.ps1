@@ -27,4 +27,21 @@ $hashStream = [IO.File]::OpenRead($archive)
 $hasher = [Security.Cryptography.SHA256]::Create()
 try { $checksum = [BitConverter]::ToString($hasher.ComputeHash($hashStream)).Replace('-', '').ToLowerInvariant() }
 finally { $hashStream.Dispose(); $hasher.Dispose() }
+if (!$Executable -and !$OutputDirectory -and !$RequireSigned) {
+    $bundles = Join-Path $projectRoot 'src-tauri\target\release\bundle\nsis'
+    $setup = Join-Path $bundles "Hush_${version}_x64-setup.exe"
+    if ((Test-Path -LiteralPath $setup -PathType Leaf) -and
+        (Get-Item -LiteralPath $setup).VersionInfo.ProductVersion -eq $version) {
+        foreach ($directory in @($artifactRoot, $bundles)) {
+            if ((Get-Item -LiteralPath $directory).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { continue }
+            Get-ChildItem -LiteralPath $directory -File | ForEach-Object {
+                if ($_.Name -cmatch '^Hush_(\d+\.\d+\.\d+)_x64(?:-setup\.exe|_portable\.zip)$' -and
+                    [version]$Matches[1] -lt [version]$version -and
+                    !$_.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+                    Remove-Item -LiteralPath $_.FullName
+                }
+            }
+        }
+    }
+}
 [pscustomobject]@{ File = [IO.Path]::GetFileName($archive); SHA256 = $checksum }

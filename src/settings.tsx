@@ -15,6 +15,7 @@ import Keyboard from 'lucide-solid/icons/keyboard';
 import Cloud from 'lucide-solid/icons/cloud';
 import Laptop from 'lucide-solid/icons/laptop';
 import { call, desktop, download, errorText, keyboardChord } from './bridge';
+import { UpdatePanel } from './updates';
 import { defaults, type Settings, type Snapshot, type OfflineStatus, type DownloadProgress, type StageDiagnostic } from './types';
 
 type Run = (work: () => Promise<unknown>, message?: string) => Promise<boolean>;
@@ -60,6 +61,7 @@ export function SettingsPage(props: { settings: Settings; diagnostics: StageDiag
     <div class="settings-tabs" role="tablist"><For each={['General', 'Dictation', 'Voice bar', 'Offline', 'Shortcuts', 'Privacy & data']}>{value => <button role="tab" aria-selected={tab() === value} classList={{ selected: tab() === value }} onClick={() => setTab(value)}>{value}</button>}</For></div>
     <div class="settings-body">
       <Show when={tab() === 'General'}>
+        <UpdatePanel/>
         <section class="panel settings-panel"><h2>Where your voice becomes text</h2><p>Choose cloud speed or keep speech recognition on this computer.</p><div class="provider-options">
           <button classList={{ 'provider-option': true, selected: draft().provider === 'groq' }} aria-pressed={draft().provider === 'groq'} onClick={() => update('provider', 'groq')}><Cloud size={22}/><span><strong>Groq cloud</strong><small>Your API key. Fast cloud inference.</small></span><Show when={draft().provider === 'groq'}><Check size={17}/></Show></button>
           <button classList={{ 'provider-option': true, selected: draft().provider === 'offline' }} aria-pressed={draft().provider === 'offline'} onClick={() => update('provider', 'offline')}><Laptop size={22}/><span><strong>On this computer</strong><small>Offline after a one-time download.</small></span><Show when={draft().provider === 'offline'}><Check size={17}/></Show></button>

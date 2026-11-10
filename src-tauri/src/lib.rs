@@ -14,6 +14,7 @@ mod recovery;
 mod shortcuts;
 mod store;
 mod text;
+mod update;
 
 pub fn run() {
     engine::run();

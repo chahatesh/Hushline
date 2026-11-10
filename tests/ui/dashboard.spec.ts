@@ -37,6 +37,41 @@ test('microphone settings distinguish Windows system and calls inputs',async({pa
   await expect.poll(()=>page.evaluate(()=>(window as unknown as Record<string,unknown>).__MICROPHONE_TEST__)).toEqual({name:'test'});
 });
 
+test('software update requires a check and explicit install, with failures available for retry', async ({ page }) => {
+  await page.addInitScript(({ defaults, emptyView }) => {
+    const host = window as unknown as Record<string, unknown>;
+    host.isTauri = true;
+    let checks = 0;
+    host.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command: string, args: Record<string, unknown>) => {
+      if (command === 'snapshot') return { settings: defaults, view: emptyView, dictionary: [], snippets: [], styles: [], history: [], historySummary: { count: 0, words: 0, revision: 0 }, savedAudio: [], diagnostics: [], scratchpad: '', startupEnabled: false, offline: { installed: [], engineVersion: '1.9.2' } };
+      if (command === 'check_for_update') {
+        checks++;
+        return { availableVersion: checks === 1 ? null : '0.8.0', publishedRelease: checks > 1, canInstall: true };
+      }
+      if (command === 'install_update') {
+        host.__UPDATE_INSTALL__ = args;
+        throw new Error('Finish your dictation or preview before updating Hush.');
+      }
+      if (command === 'microphones') return [];
+      if (command === 'microphone_defaults') return { system: null, communications: null };
+    }};
+  }, { defaults, emptyView });
+  await page.reload();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const updates = page.getByRole('region', { name: 'Software updates' });
+  const check = updates.getByRole('button', { name: 'Check for updates' });
+  await check.click();
+  await expect(updates.getByRole('status')).toHaveText('There are no published Hush releases yet.');
+  await check.click();
+  const install = updates.getByRole('button', { name: 'Install Hush 0.8.0' });
+  await expect(install).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__UPDATE_INSTALL__)).toBeUndefined();
+  await install.click();
+  await expect(updates.getByRole('alert')).toHaveText('Finish your dictation or preview before updating Hush.');
+  await expect(install).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__UPDATE_INSTALL__)).toEqual({ version: '0.8.0' });
+});
+
 test('history paste sends the chosen saved text immediately without a second shortcut', async ({ page }) => {
   await page.addInitScript(({ defaults, emptyView }) => {
     const host = window as unknown as Record<string, unknown>;

@@ -14,6 +14,8 @@ Context inspection is optional. Selected-text/whole-field editing requires its e
 
 The Groq key uses Windows Credential Manager. History/settings use the Windows user's application-data folder under `io.chahatesh.hushline`; transcript text and settings are unencrypted. Recordings saved with history use Windows user-bound DPAPI encryption. Transcript text has no automatic expiry and is kept until you delete it. Saved audio is kept for 30 days, up to 1,000 recordings or 512 MiB, with older audio removed first. Successful and failed retries retain the recording.
 
+Updates and Windows uninstall leave the local profile and saved key in place. A manual update check contacts GitHub for public release metadata. Installing an update downloads the Windows installer from GitHub. No settings, transcript, recordings, or Groq key are sent during either operation.
+
 Private mode or disabled recording storage keeps only the latest three recordings in memory, bounded to 64 MiB, until deletion or exit. Cancelled new recordings are discarded. Deleting a transcript removes its linked audio; Clear all removes transcripts and recordings, including failures without text. Configuration backups exclude keys, audio, history and scratchpad contents. Explicit WAV downloads are ordinary unencrypted files; manage those separately. Clearing local records cannot remove existing backups or recall data already sent to a provider.
 
 Diagnostics hold stage timings and fixed outcome codes, without audio, transcript/prompt contents, field text or keys. Recording failure metadata uses fixed messages instead of provider payloads. Uninstallation may retain the user profile/key for reinstall; delete records and remove the key in Hush first if desired.

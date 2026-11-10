@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.5 — 2026-11-09
+
+- Check for stable GitHub releases in Settings. The standard Windows installation verifies the download and its signed publisher, updates in place, and restarts Hush.
+- Keep settings, local history, encrypted recordings, downloaded models, and the saved key through installation, updates, and Windows uninstall.
+- Keep the newest generated installer and portable package after both packages build successfully.
+
 ## 0.7.4 — 2026-11-06
 
 - Keep Ctrl+Win held during shortcut recovery when Windows omits a suppressed Win key from its key-state snapshot. A key-up observed through either input path still ends the hold.

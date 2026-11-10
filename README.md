@@ -33,7 +33,9 @@ Requires Windows 10/11 x64, Microsoft Edge WebView2, a microphone, and desktop m
 
 Build from source using the instructions below, or obtain a development installer from a successful [Windows build](https://github.com/chahatesh/Hushline/actions/workflows/ci.yml). Development artifacts are labeled unverified. A build produces a per-user installer and a portable executable ZIP; the portable build shares the usual Windows app-data profile.
 
-The installer creates **Hush Dictation** shortcuts. Settings are retained through ordinary updates. **Settings → General → Start with Windows** is optional. For a complete uninstall, remove the saved key, transcript history, and recordings in Hush first; profile data is retained by default.
+The installer creates **Hush Dictation** shortcuts. **Settings → General → Software updates** checks the latest stable GitHub release. A standard per-user installation can download, verify, and install a signed update in place, then reopen Hush. Portable copies and custom install locations show a GitHub download link. Checks only run when requested.
+
+Updates and Windows uninstall preserve your local profile, including settings, history, saved recordings, and downloaded speech models. Reinstall under the same Windows account to access encrypted recordings and the saved API key. Use Hush’s data and key controls to delete that information separately. The usual recording retention limits still apply.
 
 ## Getting started
 
